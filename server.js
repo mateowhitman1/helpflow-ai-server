@@ -22,7 +22,7 @@ app.use(express.json());
 // Twilio client (works if TWILIO_ vars are set)
 const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 
-// ✅ This is where it usually crashes — log first
+// ✅ Check for OpenAI key
 if (!process.env.OPENAI_API_KEY) {
   console.error("❌ OPENAI_API_KEY is missing — check Railway Variables.");
   process.exit(1);
@@ -50,6 +50,20 @@ app.get("/test-gpt", async (req, res) => {
     console.error("OpenAI Error:", err);
     res.status(500).send("There was an error calling OpenAI.");
   }
+});
+
+// ✅ Twilio Webhook Route
+app.post("/webhook", (req, res) => {
+  console.log("🔔 Incoming webhook from Twilio:", req.body);
+
+  const twiml = `
+    <Response>
+      <Say voice="alice">Hello! Thanks for calling HelpFlow AI. We'll be in touch shortly.</Say>
+    </Response>
+  `;
+
+  res.type("text/xml");
+  res.send(twiml);
 });
 
 // Start server
