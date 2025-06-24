@@ -14,6 +14,12 @@ const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TO
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
+// ✅ NEW: Home route
+app.get("/", (req, res) => {
+  res.send("🚀 HelpFlow AI Server is Running!");
+});
+
+// Existing test route for OpenAI
 app.get("/test-gpt", async (req, res) => {
   try {
     const completion = await openai.chat.completions.create({
