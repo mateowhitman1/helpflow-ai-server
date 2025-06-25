@@ -1,81 +1,123 @@
-// Main entry for the HelpFlow AI voice‑bot server
-// -----------------------------------------------------------------------------
-// Key fixes / upgrades:
-//   • Loads `dotenv` **before** any other imports so env vars are available
-//   • Adds basic env‑var validation & a health‑check route
-//   • Leaves Twilio + client routing intact
-//   • Compatible with the new `logCallToAirtable` helper inside processRecording.js
-// -----------------------------------------------------------------------------
+/* processRecording.js
+   -------------------------------------------------------------
+   Twilio recording → Whisper → GPT-4 Turbo → ElevenLabs TTS
+   + Airtable log → Twilio playback
+-------------------------------------------------------------*/
 
-import "dotenv/config"; // <‑‑ ensures env vars are loaded first
+import { File } from "node:buffer";           // Whisper needs global File
+if (!globalThis.File) globalThis.File = File;
 
-import express from "express";
+import axios from "axios";
+import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import fs from "fs";
+import { OpenAI } from "openai";
 import twilioPkg from "twilio";
 
-import clientConfig from "./client-config.js";
-import { handleRecording } from "./processRecording.js";
-
-/* ---------- Paths & folders ------------------------------------------------ */
-const __filename = fileURLToPath(import.meta.url);
-const __dirname  = path.dirname(__filename);
-
-// Make sure public/audio exists (for ElevenLabs MP3s)
-const audioDir = path.join(__dirname, "public", "audio");
-fs.mkdirSync(audioDir, { recursive: true });
-
-/* ---------- Basic env‑var sanity check -------------------------------------- */
-["OPENAI_API_KEY", "ELEVENLABS_API_KEY", "AIRTABLE_API_KEY", "AIRTABLE_BASE_ID"].forEach(
-  (key) => {
-    if (!process.env[key]) console.warn(`⚠️  Missing env var: ${key}`);
-  }
-);
-
-/* ---------- App & middleware ---------------------------------------------- */
-const app  = express();
-const PORT = process.env.PORT || 8080; // Railway usually sets PORT
-
-app.use(express.urlencoded({ extended: true }));
-app.use(express.json());
-
-// Static route for generated speech files
-app.use("/audio", express.static(audioDir));
+import clientConfig          from "./client-config.js";
+import { generateSpeech }    from "./utils/elevenlabs.js";
+import { logCallToAirtable } from "./utils/airtable.js";
 
 const twilio = twilioPkg;
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-/* ---------- Routes --------------------------------------------------------- */
-// Health‑check so Railway marks the service healthy
-app.get("/", (_, res) => res.send("👍 OK – HelpFlow AI server is live"));
+/* -------------------------------------------------------------
+   Helper: build absolute URL for Twilio <Play> (needs https)
+-------------------------------------------------------------*/
+function absoluteUrl(req, relativePath) {
+  const host = process.env.PUBLIC_BASE_URL || `https://${req.headers.host}`;
+  return host + relativePath;          // relativePath already starts with “/”
+}
 
-// Twilio entry‑point – greets caller then records
-app.post("/voice", (req, res) => {
+/* -------------------------------------------------------------
+   Main handler exported to server.js
+-------------------------------------------------------------*/
+export async function handleRecording(req, res) {
+  const { client: clientId = "helpflow" } = req.query;
+  const cfg = clientConfig.clients?.[clientId];
+  if (!cfg) return res.status(400).send("Unknown client ID");
+
+  const { RecordingUrl, From, CallSid, CallStatus } = req.body;
+
+  let reply = "Sorry, something went wrong. Please try again later.";
+
   try {
-    const { client: clientId = "helpflow" } = req.query;
-    const cfg = clientConfig.clients?.[clientId];
-    if (!cfg) return res.status(400).send("Unknown client");
-
-    const vr = new twilio.twiml.VoiceResponse();
-    vr.say({ voice: "alice" }, cfg.scripts.greeting);
-
-    vr.record({
-      action   : `/process-recording?client=${clientId}`,
-      method   : "POST",
-      maxLength: 30,
-      playBeep : true,
-      trim     : "silence",
+    /* 1️⃣  Download caller audio ---------------------------------------- */
+    const tmpFile = `/tmp/${CallSid}.mp3`;
+    const audio   = await axios({
+      method: "GET",
+      url:    `${RecordingUrl}.mp3`,
+      responseType: "stream",
+      auth: {                        // Twilio basic-auth
+        username: process.env.TWILIO_ACCOUNT_SID,
+        password: process.env.TWILIO_AUTH_TOKEN,
+      },
+    });
+    await new Promise((resolve, reject) => {
+      const w = fs.createWriteStream(tmpFile);
+      audio.data.pipe(w);
+      w.on("finish", resolve);
+      w.on("error",  reject);
     });
 
+    /* 2️⃣  Whisper transcription --------------------------------------- */
+    const tr = await openai.audio.transcriptions.create({
+      file : fs.createReadStream(tmpFile),
+      model: "whisper-1",
+    });
+    const transcript = tr.text.trim();
+    console.log("📝 transcript:", transcript);
+
+    /* 3️⃣  GPT-4 Turbo reply ------------------------------------------- */
+    const chat = await openai.chat.completions.create({
+      model:       "gpt-4o-mini",     // fast Turbo variant
+      temperature: 0.6,
+      max_tokens : 120,
+      messages: [
+        { role: "system", content: cfg.scripts.systemPrompt },
+        { role: "user",   content: transcript },
+      ],
+    });
+    reply = chat.choices[0].message.content.trim();
+    console.log("💬 GPT reply:", reply);
+
+    /* 4️⃣  ElevenLabs TTS --------------------------------------------- */
+    const voiceId = process.env.ELEVENLABS_VOICE_ID || cfg.voiceId;
+    const relPath = await generateSpeech(reply, voiceId, CallSid);
+    const playUrl = absoluteUrl(req, relPath);
+    console.log("🔊 TTS saved:", playUrl);
+
+    /* 5️⃣  Airtable log ----------------------------------------------- */
+    await logCallToAirtable({
+      callId:       CallSid,
+      client:       clientId,
+      callerNumber: From,
+      dateTime:     new Date(),
+      callStatus:   CallStatus,
+      recordingUrl: `${RecordingUrl}.mp3`,
+      transcript,
+      intent:  "",          // placeholder
+      outcome: reply,
+    });
+
+    /* 6️⃣  Twilio response -------------------------------------------- */
+    const vr = new twilio.twiml.VoiceResponse();
+    vr.play(playUrl);
+    vr.redirect(`/voice?client=${clientId}`);
     res.type("text/xml").send(vr.toString());
   } catch (err) {
-    console.error("❌ /voice error:", err);
-    res.status(500).send("Voice webhook failure");
+    console.error("❌ processRecording error:", err);
+
+    // Fail-soft: speak the reply with Twilio’s built-in voice
+    try {
+      const vr = new twilio.twiml.VoiceResponse();
+      vr.say(reply);
+      res.type("text/xml").send(vr.toString());
+    } catch {
+      res.status(500).send("Error processing call");
+    }
+  } finally {
+    // Clean up tmp file
+    try { fs.unlinkSync(`/tmp/${CallSid}.mp3`); } catch {}
   }
-});
-
-// Delegate recording processing (includes Airtable logging)
-app.post("/process-recording", handleRecording);
-
-/* ---------- Boot ----------------------------------------------------------- */
-app.listen(PORT, () => console.log(`✅  Server listening on ${PORT}`));
+}
