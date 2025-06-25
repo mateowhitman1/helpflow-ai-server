@@ -21,11 +21,13 @@ import { logCallToAirtable } from "./utils/airtable.js";
 const twilio = twilioPkg;
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// NEW – rely only on PUBLIC_BASE_URL
+
+// ✅ NEW version – relies only on PUBLIC_BASE_URL
 function absoluteUrl(relativePath) {
-  const host = process.env.PUBLIC_BASE_URL;     // <-- set this in Railway
-  return host + relativePath;                   // relativePath starts with “/”
+  const host = process.env.PUBLIC_BASE_URL;   // <-- set this in Railway
+  return host + relativePath;                 // relativePath starts with “/”
 }
+
 
 export async function handleRecording(req, res) {
   const { client: clientId = "helpflow" } = req.query;
