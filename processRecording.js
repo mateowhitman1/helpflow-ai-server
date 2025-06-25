@@ -1,74 +1,74 @@
+/* processRecording.js
+   Handles Twilio recording → Whisper transcription → GPT-4 Turbo reply
+   → ElevenLabs TTS → Airtable logging → Twilio playback  */
+
 import axios from "axios";
 import fs from "fs";
 import { OpenAI } from "openai";
-import FormData from "form-data";
-import { ElevenLabs } from "./utils/elevenlabs.js";
-import { logCallToAirtable } from "./utils/airtable.js";
+import twilioPkg from "twilio";
 import clientConfig from "./client-config.js";
+import { generateSpeech } from "./utils/elevenlabs.js";   // ✅ fixed
+import { logCallToAirtable } from "./utils/airtable.js";
 
+const twilio = twilioPkg;
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 export async function handleRecording(req, res) {
   const { client = "helpflow" } = req.query;
-  const config = clientConfig.clients[client];
+  const cfg = clientConfig.clients[client];
   const { RecordingUrl, From, CallSid } = req.body;
 
-  console.log(`🎙️ Received recording from ${From}: ${RecordingUrl}`);
-
   try {
-    // Step 1: Download audio
-    const audioPath = `/tmp/${CallSid}.mp3`;
-    const response = await axios({
-      method: "GET",
-      url: `${RecordingUrl}.mp3`,
-      responseType: "stream",
+    /* 1️⃣ Download caller audio */
+    const file = `/tmp/${CallSid}.mp3`;
+    const audio = await axios.get(`${RecordingUrl}.mp3`, { responseType: "stream" });
+    await new Promise((resolve) => {
+      const w = fs.createWriteStream(file);
+      audio.data.pipe(w);
+      w.on("finish", resolve);
     });
-    const writer = fs.createWriteStream(audioPath);
-    response.data.pipe(writer);
-    await new Promise((resolve) => writer.on("finish", resolve));
 
-    // Step 2: Transcribe
-    const transcriptResp = await openai.audio.transcriptions.create({
-      file: fs.createReadStream(audioPath),
+    /* 2️⃣ Transcribe via Whisper */
+    const tr = await openai.audio.transcriptions.create({
+      file: fs.createReadStream(file),
       model: "whisper-1",
     });
-    const transcript = transcriptResp.text;
+    const transcript = tr.text;
     console.log("📝 Transcript:", transcript);
 
-    // Step 3: GPT-4 Turbo response
-    const systemPrompt = config.scripts.systemPrompt;
-    const messages = [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: transcript },
-    ];
-    const gptResponse = await openai.chat.completions.create({
+    /* 3️⃣ GPT-4 Turbo reply */
+    const gpt = await openai.chat.completions.create({
       model: "gpt-4-turbo",
-      messages,
+      messages: [
+        { role: "system", content: cfg.scripts.systemPrompt },
+        { role: "user", content: transcript },
+      ],
     });
-    const reply = gptResponse.choices[0].message.content;
+    const reply = gpt.choices[0].message.content;
     console.log("💬 GPT Reply:", reply);
 
-    // Step 4: Convert reply to audio
-    const voiceId = config.voiceId;
-    const audioUrl = await ElevenLabs.generateSpeech(reply, voiceId);
-    console.log("🔊 ElevenLabs URL:", audioUrl);
+    /* 4️⃣ ElevenLabs TTS */
+    const audioUrl = await generateSpeech(reply, cfg.voiceId);   // ✅ fixed
+    console.log("🔊 TTS ready");
 
-    // Step 5: Log to Airtable
+    /* 5️⃣ Log to Airtable */
     await logCallToAirtable({
       callId: CallSid,
       caller: From,
       transcript,
-      intent: "", // You can add intent detection later
+      intent: "",           // optional: add intent parsing later
       outcome: reply,
       recordingUrl: `${RecordingUrl}.mp3`,
     });
 
-    // Step 6: Respond with audio
+    /* 6️⃣ Respond to Twilio */
     const twiml = new twilio.twiml.VoiceResponse();
     twiml.play(audioUrl);
+    twiml.redirect(`/voice?client=${client}`);   // loop
+
     res.type("text/xml").send(twiml.toString());
   } catch (err) {
-    console.error("❌ Error in processRecording:", err);
-    res.status(500).send("Error processing recording");
+    console.error("❌ processRecording error:", err);
+    res.status(500).send("Error processing call");
   }
 }
