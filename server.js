@@ -55,16 +55,22 @@ app.get("/test-gpt", async (req, res) => {
 
 // 📞 Twilio voice webhook route
 app.post("/voice", (req, res) => {
-  console.log("🔔 Incoming voice call from Twilio:", req.body);
+  try {
+    console.log("🔔 Incoming voice call from Twilio:", req.body);
 
-  const twiml = new VoiceResponse();
-  twiml.say({ voice: "alice" }, "Hello! Thanks for calling HelpFlow AI. We'll be in touch shortly.");
+    const twiml = new VoiceResponse();
+    twiml.say({ voice: "alice" }, "Hello! Thanks for calling HelpFlow AI. We'll be in touch shortly.");
 
-  res.type("text/xml");
-  res.send(twiml.toString());
+    res.type("text/xml");
+    res.send(twiml.toString());
+  } catch (error) {
+    console.error("❌ Error in /voice route:", error.message);
+    res.status(500).send("Server error while generating voice response");
+  }
 });
 
 // Start server
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
