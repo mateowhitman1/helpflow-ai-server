@@ -7,7 +7,7 @@ import fs from "fs";
 import { OpenAI } from "openai";
 import twilioPkg from "twilio";
 import clientConfig from "./client-config.js";
-import { generateSpeech } from "./utils/elevenlabs.js";   // ✅ fixed
+import { generateSpeech } from "./utils/elevenlabs.js";
 import { logCallToAirtable } from "./utils/airtable.js";
 
 const twilio = twilioPkg;
@@ -19,9 +19,17 @@ export async function handleRecording(req, res) {
   const { RecordingUrl, From, CallSid } = req.body;
 
   try {
-    /* 1️⃣ Download caller audio */
+    /* 1️⃣ Download caller audio (Twilio requires Basic Auth) */
     const file = `/tmp/${CallSid}.mp3`;
-    const audio = await axios.get(`${RecordingUrl}.mp3`, { responseType: "stream" });
+    const audio = await axios({
+      method: "GET",
+      url: `${RecordingUrl}.mp3`,
+      responseType: "stream",
+      auth: {
+        username: process.env.TWILIO_ACCOUNT_SID,
+        password: process.env.TWILIO_AUTH_TOKEN,
+      },
+    });
     await new Promise((resolve) => {
       const w = fs.createWriteStream(file);
       audio.data.pipe(w);
@@ -48,23 +56,24 @@ export async function handleRecording(req, res) {
     console.log("💬 GPT Reply:", reply);
 
     /* 4️⃣ ElevenLabs TTS */
-    const audioUrl = await generateSpeech(reply, cfg.voiceId);   // ✅ fixed
-    console.log("🔊 TTS ready");
+    const audioUrl = await generateSpeech(reply, cfg.voiceId, CallSid);
+    console.log("🔊 TTS ready:", audioUrl);
 
     /* 5️⃣ Log to Airtable */
     await logCallToAirtable({
       callId: CallSid,
       caller: From,
       transcript,
-      intent: "",           // optional: add intent parsing later
+      intent: "",          // add intent parsing later
       outcome: reply,
       recordingUrl: `${RecordingUrl}.mp3`,
     });
+    console.log("✅ Row saved to Airtable");
 
     /* 6️⃣ Respond to Twilio */
     const twiml = new twilio.twiml.VoiceResponse();
     twiml.play(audioUrl);
-    twiml.redirect(`/voice?client=${client}`);   // loop
+    twiml.redirect(`/voice?client=${client}`); // loop conversation
 
     res.type("text/xml").send(twiml.toString());
   } catch (err) {
@@ -72,3 +81,4 @@ export async function handleRecording(req, res) {
     res.status(500).send("Error processing call");
   }
 }
+
