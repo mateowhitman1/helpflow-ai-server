@@ -6,17 +6,24 @@ import dotenv from "dotenv";
 import twilioPkg from "twilio";
 import clientConfig from "./client-config.js";
 import { handleRecording } from "./processRecording.js";
+import path from "path";
+import { fileURLToPath } from "url";
 
-dotenv.config();
+dotenv.config();                       // load .env first
 
 const twilio = twilioPkg;
-const app = express();
+const app = express();                 // create app BEFORE app.use
 const PORT = process.env.PORT || 3000;
 
+/* ----------- STATIC /audio ------------ */
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+app.use("/audio", express.static(path.join(__dirname, "public/audio")));
+
+/* -------------- MIDDLEWARE ------------ */
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
-/* ---------- /VOICE ---------- */
+/* --------------- /VOICE --------------- */
 app.post("/voice", (req, res) => {
   const { client: clientId = "helpflow" } = req.query;
   const cfg = clientConfig.clients[clientId];
@@ -36,12 +43,13 @@ app.post("/voice", (req, res) => {
   res.type("text/xml").send(twiml.toString());
 });
 
-/* ------ /PROCESS-RECORDING --- */
+/* -------- /PROCESS-RECORDING ---------- */
 app.post("/process-recording", handleRecording);
 
 /* -------- Root + test -------- */
 app.get("/", (_, r) => r.send("🚀 HelpFlow AI Server"));
 app.listen(PORT, () => console.log(`✅ Server on ${PORT}`));
+
 
 
 
