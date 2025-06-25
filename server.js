@@ -52,8 +52,8 @@ app.get("/test-gpt", async (req, res) => {
   }
 });
 
-// ✅ Twilio Webhook Route
-app.post("/webhook", (req, res) => {
+// ✅ Twilio voice Webhook Route
+app.post("/voice", (req, res) => {
   console.log("🔔 Incoming webhook from Twilio:", req.body);
 
   const twiml = `
