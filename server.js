@@ -5,7 +5,7 @@ import express from "express";
 import dotenv from "dotenv";
 import { OpenAI } from "openai";
 import twilioPkg from "twilio";
-const { VoiceResponse } = twilioPkg;
+const twilio = twilioPkg; // ✅ Use this for compatibility
 
 // Load .env file locally — safe on Railway too
 dotenv.config();
@@ -21,7 +21,7 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
 // Twilio client (optional use later)
-const client = twilioPkg(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 
 // ✅ Check for OpenAI key
 if (!process.env.OPENAI_API_KEY) {
@@ -59,7 +59,7 @@ app.post("/voice", (req, res) => {
 
   try {
     console.log("➡ Creating VoiceResponse instance...");
-    const twiml = new VoiceResponse();
+    const twiml = new twilio.twiml.VoiceResponse(); // ✅ THIS FIXES THE ERROR
 
     console.log("➡ Adding say()...");
     twiml.say({ voice: "alice" }, "Hello! Thanks for calling HelpFlow AI. We'll be in touch shortly.");
