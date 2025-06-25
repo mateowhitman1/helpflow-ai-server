@@ -4,7 +4,8 @@ console.log("DEBUG - OPENAI_API_KEY (before imports):", JSON.stringify(process?.
 import express from "express";
 import dotenv from "dotenv";
 import { OpenAI } from "openai";
-import twilio, { VoiceResponse } from "twilio";
+import twilio from "twilio";
+const { VoiceResponse } = twilio;
 
 // Load .env file locally — safe on Railway too
 dotenv.config();
