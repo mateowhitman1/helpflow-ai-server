@@ -2,6 +2,10 @@ import axios from "axios";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+console.log(
+  "ElevenLabs key in memory →",
+  process.env.ELEVENLABS_API_KEY?.slice(0, 8) + "…"
+);
 
 /**
  * Generate speech with ElevenLabs, store in public/audio/, return a URL Twilio can play.
