@@ -21,9 +21,10 @@ import { logCallToAirtable } from "./utils/airtable.js";
 const twilio = twilioPkg;
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-function absoluteUrl(req, relativePath) {
-  const host = process.env.PUBLIC_BASE_URL || `https://${req.headers.host}`;
-  return host + relativePath; // relativePath already starts with “/”
+// NEW – rely only on PUBLIC_BASE_URL
+function absoluteUrl(relativePath) {
+  const host = process.env.PUBLIC_BASE_URL;     // <-- set this in Railway
+  return host + relativePath;                   // relativePath starts with “/”
 }
 
 export async function handleRecording(req, res) {
@@ -78,7 +79,7 @@ export async function handleRecording(req, res) {
     /* 4 — ElevenLabs TTS */
     const voiceId = process.env.ELEVENLABS_VOICE_ID || cfg.voiceId;
     const relPath = await generateSpeech(reply, voiceId, CallSid);
-    const playUrl = absoluteUrl(req, relPath);
+    const playUrl = absoluteUrl(relPath);
     console.log("🔊 TTS saved:", playUrl);
 
     /* 5 — Airtable log */
