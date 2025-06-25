@@ -4,12 +4,12 @@ console.log("DEBUG - OPENAI_API_KEY (before imports):", JSON.stringify(process?.
 import express from "express";
 import dotenv from "dotenv";
 import { OpenAI } from "openai";
-import twilio from "twilio";
+import twilio, { VoiceResponse } from "twilio";
 
 // Load .env file locally — safe on Railway too
 dotenv.config();
 
-// Log the key AFTER dotenv runs (should match before if on Railway)
+// Log the key AFTER dotenv runs
 console.log("DEBUG - OPENAI_API_KEY (after dotenv):", JSON.stringify(process?.env?.OPENAI_API_KEY));
 
 const app = express();
@@ -19,7 +19,7 @@ const PORT = process.env.PORT || 3000;
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
-// Twilio client (works if TWILIO_ vars are set)
+// Twilio client (optional use later)
 const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 
 // ✅ Check for OpenAI key
@@ -32,12 +32,12 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-// Test home route
+// 🌐 Root route
 app.get("/", (req, res) => {
   res.send("🚀 HelpFlow AI Server is Running!");
 });
 
-// Test OpenAI route
+// 🤖 Test OpenAI route
 app.get("/test-gpt", async (req, res) => {
   try {
     const completion = await openai.chat.completions.create({
@@ -52,18 +52,15 @@ app.get("/test-gpt", async (req, res) => {
   }
 });
 
-// ✅ Twilio voice Webhook Route
+// 📞 Twilio voice webhook route
 app.post("/voice", (req, res) => {
-  console.log("🔔 Incoming webhook from Twilio:", req.body);
+  console.log("🔔 Incoming voice call from Twilio:", req.body);
 
-  const twiml = `
-    <Response>
-      <Say voice="alice">Hello! Thanks for calling HelpFlow AI. We'll be in touch shortly.</Say>
-    </Response>
-  `;
+  const twiml = new VoiceResponse();
+  twiml.say({ voice: "alice" }, "Hello! Thanks for calling HelpFlow AI. We'll be in touch shortly.");
 
   res.type("text/xml");
-  res.send(twiml);
+  res.send(twiml.toString());
 });
 
 // Start server
