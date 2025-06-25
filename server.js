@@ -53,19 +53,25 @@ app.get("/test-gpt", async (req, res) => {
   }
 });
 
-// 📞 Twilio voice webhook route
+// 📞 Twilio voice webhook route with debug logging
 app.post("/voice", (req, res) => {
-  try {
-    console.log("🔔 Incoming voice call from Twilio:", req.body);
+  console.log("🔔 /voice route triggered");
 
+  try {
+    console.log("➡ Creating VoiceResponse instance...");
     const twiml = new VoiceResponse();
+
+    console.log("➡ Adding say()...");
     twiml.say({ voice: "alice" }, "Hello! Thanks for calling HelpFlow AI. We'll be in touch shortly.");
 
+    const responseXml = twiml.toString();
+    console.log("✅ TwiML generated:", responseXml);
+
     res.type("text/xml");
-    res.send(twiml.toString());
+    res.send(responseXml);
   } catch (error) {
-    console.error("❌ Error in /voice route:", error.message);
-    res.status(500).send("Server error while generating voice response");
+    console.error("❌ Error inside /voice route:", error);
+    res.status(500).send("Error generating voice response");
   }
 });
 
@@ -73,4 +79,5 @@ app.post("/voice", (req, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
