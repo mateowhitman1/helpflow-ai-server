@@ -4,8 +4,8 @@ console.log("DEBUG - OPENAI_API_KEY (before imports):", JSON.stringify(process?.
 import express from "express";
 import dotenv from "dotenv";
 import { OpenAI } from "openai";
-import twilio from "twilio";
-const { VoiceResponse } = twilio;
+import twilioPkg from "twilio";
+const { VoiceResponse } = twilioPkg;
 
 // Load .env file locally — safe on Railway too
 dotenv.config();
@@ -21,7 +21,7 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
 // Twilio client (optional use later)
-const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+const client = twilioPkg(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 
 // ✅ Check for OpenAI key
 if (!process.env.OPENAI_API_KEY) {
@@ -79,5 +79,6 @@ app.post("/voice", (req, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
