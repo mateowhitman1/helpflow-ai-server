@@ -1,6 +1,6 @@
 /* processRecording.js
    Handles Twilio recording → Whisper transcription → GPT-4 Turbo reply
-   → ElevenLabs TTS → Airtable logging → Twilio playback  */
+   → ElevenLabs TTS → Airtable logging → Twilio playback */
 
 import axios from "axios";
 import fs from "fs";
@@ -9,6 +9,10 @@ import twilioPkg from "twilio";
 import clientConfig from "./client-config.js";
 import { generateSpeech } from "./utils/elevenlabs.js";
 import { logCallToAirtable } from "./utils/airtable.js";
+
+/* ---- polyfill File for Node 18 ---- */
+import { File } from "node:buffer";
+globalThis.File = File;                           // ⬅️ key line
 
 const twilio = twilioPkg;
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -19,8 +23,8 @@ export async function handleRecording(req, res) {
   const { RecordingUrl, From, CallSid } = req.body;
 
   try {
-    /* 1️⃣ Download caller audio (Twilio requires Basic Auth) */
-    const file = `/tmp/${CallSid}.mp3`;
+    /* 1️⃣ Download caller audio (requires Twilio auth) */
+    const filePath = `/tmp/${CallSid}.mp3`;
     const audio = await axios({
       method: "GET",
       url: `${RecordingUrl}.mp3`,
@@ -31,14 +35,16 @@ export async function handleRecording(req, res) {
       },
     });
     await new Promise((resolve) => {
-      const w = fs.createWriteStream(file);
+      const w = fs.createWriteStream(filePath);
       audio.data.pipe(w);
       w.on("finish", resolve);
     });
 
-    /* 2️⃣ Transcribe via Whisper */
+    /* 2️⃣ Transcribe via Whisper (File API) */
+    const audioBuf  = fs.readFileSync(filePath);
+    const audioFile = new File([audioBuf], `${CallSid}.mp3`, { type: "audio/mpeg" });
     const tr = await openai.audio.transcriptions.create({
-      file: fs.createReadStream(file),
+      file: audioFile,
       model: "whisper-1",
     });
     const transcript = tr.text;
@@ -49,7 +55,7 @@ export async function handleRecording(req, res) {
       model: "gpt-4-turbo",
       messages: [
         { role: "system", content: cfg.scripts.systemPrompt },
-        { role: "user", content: transcript },
+        { role: "user",   content: transcript },
       ],
     });
     const reply = gpt.choices[0].message.content;
@@ -64,7 +70,7 @@ export async function handleRecording(req, res) {
       callId: CallSid,
       caller: From,
       transcript,
-      intent: "",          // add intent parsing later
+      intent: "",                // add intent parsing later
       outcome: reply,
       recordingUrl: `${RecordingUrl}.mp3`,
     });
@@ -73,7 +79,7 @@ export async function handleRecording(req, res) {
     /* 6️⃣ Respond to Twilio */
     const twiml = new twilio.twiml.VoiceResponse();
     twiml.play(audioUrl);
-    twiml.redirect(`/voice?client=${client}`); // loop conversation
+    twiml.redirect(`/voice?client=${client}`);     // loop conversation
 
     res.type("text/xml").send(twiml.toString());
   } catch (err) {
@@ -81,4 +87,5 @@ export async function handleRecording(req, res) {
     res.status(500).send("Error processing call");
   }
 }
+
 
