@@ -5,7 +5,9 @@ import express from "express";
 import dotenv from "dotenv";
 import { OpenAI } from "openai";
 import twilioPkg from "twilio";
-const twilio = twilioPkg; // ✅ Use this for compatibility
+import clientConfig from "./client-config.js"; // ✅ NEW: Import config
+
+const twilio = twilioPkg; // ✅ Compatibility for CJS modules
 
 // Load .env file locally — safe on Railway too
 dotenv.config();
@@ -53,16 +55,31 @@ app.get("/test-gpt", async (req, res) => {
   }
 });
 
-// 📞 Twilio voice webhook route with debug logging
+// 📞 Twilio voice webhook route with client-config support
 app.post("/voice", (req, res) => {
   console.log("🔔 /voice route triggered");
 
   try {
-    console.log("➡ Creating VoiceResponse instance...");
-    const twiml = new twilio.twiml.VoiceResponse(); // ✅ THIS FIXES THE ERROR
+    const { client: clientId = "helpflow" } = req.query;
+    const config = clientConfig.clients[clientId];
 
-    console.log("➡ Adding say()...");
-    twiml.say({ voice: "alice" }, "Hello! Thanks for calling HelpFlow AI. We'll be in touch shortly.");
+    if (!config) {
+      throw new Error(`Client config not found for: ${clientId}`);
+    }
+
+    const twiml = new twilio.twiml.VoiceResponse();
+
+    console.log("➡ Using client greeting:", config.scripts.greeting);
+    twiml.say({ voice: "alice" }, config.scripts.greeting || "Hello! How can I help?");
+
+    twiml.record({
+      action: `/process-recording?client=${clientId}`,
+      method: "POST",
+      transcribe: false,
+      maxLength: 30,
+      trim: "silence",
+      playBeep: true,
+    });
 
     const responseXml = twiml.toString();
     console.log("✅ TwiML generated:", responseXml);
