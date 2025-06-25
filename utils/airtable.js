@@ -45,7 +45,7 @@ export async function logCallToAirtable({
       "Call ID": callId,
       "Client": client,
       "Caller Number": callerNumber,
-      "Date And Time": dateTime.toISOString(),
+      "Date and time": dateTime.toISOString(),
       "Call Status": callStatus,
       "Recording URL": recordingUrl,
       Transcript: transcript,
