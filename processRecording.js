@@ -25,7 +25,7 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 // ✅ NEW version – relies only on PUBLIC_BASE_URL
 function absoluteUrl(relativePath) {
   const host = process.env.PUBLIC_BASE_URL;   // <-- set this in Railway
-  return host + relativePath;                 // relativePath starts with “/”
+  return host + relativePath;                 // relativePath starts with "/"
 }
 
 export async function handleRecording(req, res) {
@@ -109,6 +109,9 @@ export async function handleRecording(req, res) {
     });
     vr.say("Thank you for calling HelpFlow AI. Have a great day!");
     vr.hangup();
+
++   // ——— LOG THE TWIML RESPONSE FOR DEBUG ———
++   console.log("🛠️ [process-recording] TwiML response:\n", vr.toString());
 
     res.type("text/xml").send(vr.toString());
   } catch (err) {
