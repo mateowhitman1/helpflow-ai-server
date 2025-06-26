@@ -41,9 +41,33 @@ export async function handleRecording(req, res) {
       "🛠️ [process-recording] Gather callback detected, no RecordingUrl.",
       "SpeechResult=", SpeechResult
     );
-    // For now, just hang up quietly or handle SpeechResult
+    
+    // 1️⃣ Send SpeechResult to GPT for follow-up
+    const followChat = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0.6,
+      max_tokens: 120,
+      messages: [
+        { role: "system", content: cfg.scripts.systemPrompt },
+        { role: "user", content: SpeechResult },
+      ],
+    });
+    const followUp = followChat.choices[0].message.content.trim();
+    console.log("💬 GPT follow-up reply:", followUp);
+
+    // 2️⃣ Generate TTS for follow-up
+    const voiceId = process.env.ELEVENLABS_VOICE_ID || cfg.voiceId;
+    const relPath2 = await generateSpeech(followUp, voiceId, `${CallSid}-followup`);
+    const playUrl2 = absoluteUrl(relPath2);
+    console.log('🛠️ [process-recording] Follow-up play URL:', playUrl2);
+
+    // 3️⃣ Build TwiML to play follow-up then hang up
     const vr = new twilio.twiml.VoiceResponse();
+    vr.play(playUrl2);
+    vr.say("Thank you for calling HelpFlow AI. Have a great day!");
     vr.hangup();
+
+    console.log("🛠️ [process-recording] TwiML follow-up response:\n", vr.toString());
     return res.type("text/xml").send(vr.toString());
   }
 
