@@ -1,4 +1,5 @@
-/* processRecording.js
+// processRecording.js
+/* 
    -------------------------------------------------------------
    Twilio recording → Whisper → GPT-4 Turbo → ElevenLabs TTS
    + Airtable log → Twilio playback (with Gather for next turn)
@@ -21,13 +22,11 @@ import { logCallToAirtable } from "./utils/airtable.js";
 const twilio = twilioPkg;
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-
 // ✅ NEW version – relies only on PUBLIC_BASE_URL
 function absoluteUrl(relativePath) {
   const host = process.env.PUBLIC_BASE_URL;   // <-- set this in Railway
   return host + relativePath;                 // relativePath starts with “/”
 }
-
 
 export async function handleRecording(req, res) {
   const { client: clientId = "helpflow" } = req.query;
@@ -35,12 +34,12 @@ export async function handleRecording(req, res) {
   if (!cfg) return res.status(400).send("Unknown client ID");
 
   const { RecordingUrl, From, CallSid, CallStatus } = req.body;
-
   let reply = "Sorry, something went wrong. Please try again later.";
 
   try {
     /* 1 — Download caller audio */
     const tmpFile = `/tmp/${CallSid}.mp3`;
+    console.log('🛠️ [process-recording] Downloading from:', `${RecordingUrl}.mp3`);
     const audio = await axios({
       method: "GET",
       url: `${RecordingUrl}.mp3`,
@@ -81,8 +80,11 @@ export async function handleRecording(req, res) {
     /* 4 — ElevenLabs TTS */
     const voiceId = process.env.ELEVENLABS_VOICE_ID || cfg.voiceId;
     const relPath = await generateSpeech(reply, voiceId, CallSid);
+    console.log('🛠️ [process-recording] PUBLIC_BASE_URL =', process.env.PUBLIC_BASE_URL);
+    console.log('🛠️ [process-recording] relPath =', relPath);
+
     const playUrl = absoluteUrl(relPath);
-    console.log("🔊 TTS saved:", playUrl);
+    console.log('🛠️ [process-recording] Will play via Twilio at URL:', playUrl);
 
     /* 5 — Airtable log */
     await logCallToAirtable({
@@ -100,13 +102,11 @@ export async function handleRecording(req, res) {
     /* 6 — Twilio response with Gather */
     const vr = new twilio.twiml.VoiceResponse();
     vr.play(playUrl);
-
     vr.gather({
       input: "speech",
       action: `/process-recording?client=${clientId}`,
-      timeout: 6,          // seconds of silence before ending
+      timeout: 6,
     });
-
     vr.say("Thank you for calling HelpFlow AI. Have a great day!");
     vr.hangup();
 
