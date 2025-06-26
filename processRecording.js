@@ -11,7 +11,6 @@ if (!globalThis.File) globalThis.File = File;
 import axios from "axios";
 import fs from "fs";
 import path from "path";
-import { fileURLToPath } from "url";
 import { OpenAI } from "openai";
 import twilioPkg from "twilio";
 
@@ -33,7 +32,21 @@ export async function handleRecording(req, res) {
   const cfg = clientConfig.clients?.[clientId];
   if (!cfg) return res.status(400).send("Unknown client ID");
 
-  const { RecordingUrl, From, CallSid, CallStatus } = req.body;
+  // Extract incoming params
+  const { RecordingUrl, From, CallSid, CallStatus, SpeechResult } = req.body;
+
+  // — Guard: skip download/transcription when Gather callback (no RecordingUrl) —
+  if (!RecordingUrl) {
+    console.log(
+      "🛠️ [process-recording] Gather callback detected, no RecordingUrl.",
+      "SpeechResult=", SpeechResult
+    );
+    // For now, just hang up quietly or handle SpeechResult
+    const vr = new twilio.twiml.VoiceResponse();
+    vr.hangup();
+    return res.type("text/xml").send(vr.toString());
+  }
+
   let reply = "Sorry, something went wrong. Please try again later.";
 
   try {
@@ -110,8 +123,8 @@ export async function handleRecording(req, res) {
     vr.say("Thank you for calling HelpFlow AI. Have a great day!");
     vr.hangup();
 
-+   // ——— LOG THE TWIML RESPONSE FOR DEBUG ———
-+   console.log("🛠️ [process-recording] TwiML response:\n", vr.toString());
+    // ——— LOG THE TWIML RESPONSE FOR DEBUG ———
+    console.log("🛠️ [process-recording] TwiML response:\n", vr.toString());
 
     res.type("text/xml").send(vr.toString());
   } catch (err) {
