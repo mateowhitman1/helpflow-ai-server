@@ -1,23 +1,26 @@
 // vectorStore.js
-import fs from "fs/promises";
-import path from "path";
-import cosineSimilarity from "cosine-similarity";
-
-const CHUNKS_PATH = path.resolve(process.cwd(), "docChunks.json");
-const EMBEDS_PATH = path.resolve(process.cwd(), "embeddings.json");
+import fs from 'fs/promises';
+import cosineSimilarity from 'cosine-similarity';
+import { CHUNKS_PATH, EMBEDS_PATH } from './config.js';
 
 /**
  * Load both chunks and embeddings into memory.
  * @returns {Promise<{ chunks: Array, embeds: Array }>}
  */
 export async function loadIndex() {
-  const [chunksRaw, embedsRaw] = await Promise.all([
-    fs.readFile(CHUNKS_PATH, "utf-8"),
-    fs.readFile(EMBEDS_PATH, "utf-8"),
-  ]);
-  const chunks = JSON.parse(chunksRaw);
-  const embeds = JSON.parse(embedsRaw);
-  return { chunks, embeds };
+  try {
+    const [chunksRaw, embedsRaw] = await Promise.all([
+      fs.readFile(CHUNKS_PATH, 'utf-8'),
+      fs.readFile(EMBEDS_PATH, 'utf-8'),
+    ]);
+    const chunks = JSON.parse(chunksRaw);
+    const embeds = JSON.parse(embedsRaw);
+    return { chunks, embeds };
+  } catch (err) {
+    throw new Error(
+      `Failed to load index files:\n  Chunks path: ${CHUNKS_PATH}\n  Embeds path: ${EMBEDS_PATH}\n  Error: ${err.message}`
+    );
+  }
 }
 
 /**
