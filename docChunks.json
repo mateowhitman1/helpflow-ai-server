@@ -1,0 +1,26 @@
+[
+  {
+    "clientId": "recxE35AWPjhzZ7OV",
+    "clientName": "Test client",
+    "source": "FAQ'S",
+    "recordId": "recYl0uMuKIE5BNvg",
+    "chunkIndex": 0,
+    "text": "We’re open Monday–Friday, 9 AM to 5 PM."
+  },
+  {
+    "clientId": "recxE35AWPjhzZ7OV",
+    "clientName": "Test client",
+    "source": "FAQ'S",
+    "recordId": "recpv1oTe0klucBPi",
+    "chunkIndex": 0,
+    "text": "We’re open Monday–Friday, 9 AM to 5 PM."
+  },
+  {
+    "clientId": "recxE35AWPjhzZ7OV",
+    "clientName": "Test client",
+    "source": "Script",
+    "recordId": "recnVu5ztIOVUJWVr",
+    "chunkIndex": 0,
+    "text": "Hello, you’ve reached Test Client. How can I help?"
+  }
+]
