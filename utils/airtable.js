@@ -8,11 +8,13 @@ import dotenv from "dotenv";
 dotenv.config();
 
 import Airtable from "airtable";
+import { fileURLToPath } from "url";
+import { dirname } from "path";
 
 const { AIRTABLE_API_KEY, AIRTABLE_BASE_ID } = process.env;
 if (!AIRTABLE_API_KEY || !AIRTABLE_BASE_ID) {
   throw new Error(
-    "Missing Airtable env vars: AIRTABLE_API_KEY or AIRTABLE_BASEID"
+    "Missing Airtable env vars: AIRTABLE_API_KEY or AIRTABLE_BASE_ID"
   );
 }
 
@@ -93,9 +95,12 @@ export async function logCallToAirtable({
 }
 
 // -------------------------------------------------------------
-// Quick test block: run this file directly to fetch Scripts + FAQs
+// Quick test block: run this file directly (ESM-safe)
 // -------------------------------------------------------------
-if (require.main === module) {
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+if (process.argv[1] === __filename) {
   (async () => {
     const clientId = "recXXXXXXXXXXXXX"; // replace with a real Client record ID
 
