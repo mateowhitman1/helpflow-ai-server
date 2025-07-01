@@ -1,109 +1,84 @@
 // server.js
-// -----------------------------------------------------------------------------
-// Main entry for the HelpFlow AI voice‑bot server (in‑memory retrieval)
-// -----------------------------------------------------------------------------
-// Requires Node v18+ for ES modules and "type":"module" in package.json
+import express from 'express';
+import dotenv from 'dotenv';
+import { OpenAI } from 'openai';
+import { getClientConfig, registerMetricsEndpoint } from './client-config.js';
+import { handleRecording } from './processRecording.js';
+import { search } from './vectorStore.js';
 
-import "dotenv/config";
-import express from "express";
-import path from "path";
-import { fileURLToPath } from "url";
-import fs from "fs";
-import twilio from "twilio";
-import cosine from "cosine-similarity";
-import OpenAI from "openai";
-import clientConfig from "./client-config.js";
-import { handleRecording } from "./processRecording.js";
+dotenv.config();
+const app = express();
+app.use(express.json());
 
-// Derive __dirname in ES modules
-const __filename = fileURLToPath(import.meta.url);
-const __dirname  = path.dirname(__filename);
-
-// Ensure public/audio exists
-const audioDir = path.join(__dirname, "public", "audio");
-fs.mkdirSync(audioDir, { recursive: true });
-
-// Load embeddings and document chunks
-const embeddings = JSON.parse(
-  fs.readFileSync(path.join(__dirname, "embeddings.json"), "utf8")
-);
-const docChunks = JSON.parse(
-  fs.readFileSync(path.join(__dirname, "docChunks.json"), "utf8")
-);
+// Expose cache metrics for client-config
+registerMetricsEndpoint(app);
 
 // Initialize OpenAI client
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// In-memory retrieval helper
-async function retrieveContext(question, topK = 5) {
-  // 1) Embed the question
-  const res = await openai.embeddings.create({
-    input: question,
-    model: "text-embedding-ada-002"
-  });
-  const qVec = res.data[0].embedding;
+// Helper to build a consistent RAG prompt
+function buildRagPrompt(systemPrompt, contextText, userText) {
+  return `
+${systemPrompt}
 
-  // 2) Compute similarity scores
-  const scored = embeddings.map(e => ({ id: e.id, score: cosine(qVec, e.values) }));
+Context:
+${contextText}
 
-  // 3) Select top K chunks
-  return scored
-    .sort((a, b) => b.score - a.score)
-    .slice(0, topK)
-    .map(({ id }) => {
-      const chunk = docChunks.find(c => c.id === id);
-      return { id, text: chunk?.text || "" };
-    });
+User:
+${userText}`.trim();
 }
 
-// Express app setup
-const app = express();
-const PORT = process.env.PORT || 8080;
-app.use(express.urlencoded({ extended: true }));
-app.use(express.json());
-app.use("/audio", express.static(audioDir));
-
-// Health-check
-app.get("/", (_, res) => res.send("👍 OK – HelpFlow AI server is live"));
-
-// Retrieval endpoint
-app.post("/retrieve", async (req, res) => {
-  const { question } = req.body;
-  if (!question) return res.status(400).json({ error: "question is required" });
+// Config fetch route
+app.get('/config', async (req, res) => {
+  const { client } = req.query;
+  if (!client) return res.status(400).json({ error: 'Missing client param' });
   try {
-    const context = await retrieveContext(question);
-    res.json({ context });
+    const cfg = await getClientConfig(client);
+    res.json(cfg);
   } catch (err) {
-    console.error("❌ /retrieve error:", err);
-    res.status(500).json({ error: "Retrieval failed" });
+    res.status(404).json({ error: err.message });
   }
 });
 
-// Twilio voice webhook
-app.post("/voice", (req, res) => {
-  try {
-    const { client: clientId = "helpflow" } = req.query;
-    const cfg = clientConfig.clients?.[clientId];
-    if (!cfg) return res.status(400).send("Unknown client");
+// Twilio webhook route
+app.post('/process-recording', handleRecording);
 
-    const vr = new twilio.twiml.VoiceResponse();
-    vr.say({ voice: "alice" }, cfg.scripts.greeting);
-    vr.record({
-      action: `/process-recording?client=${clientId}`,
-      method: "POST",
-      maxLength: 30,
-      playBeep: true,
-      trim: "silence"
+// Standalone RAG endpoint
+app.post('/search-local', async (req, res) => {
+  try {
+    const { query } = req.body;
+    if (!query) return res.status(400).json({ error: 'Missing query' });
+
+    // 1) Embed the user query
+    const embRes = await openai.embeddings.create({
+      model: 'text-embedding-ada-002',
+      input: query,
     });
-    res.type("text/xml").send(vr.toString());
+    const queryEmbed = embRes.data[0].embedding;
+
+    // 2) Retrieve top-5 context chunks
+    const results = await search(queryEmbed, 5);
+    const contextText = results.map((r, i) => `Context ${i+1}: ${r.chunk.text}`).join('\n\n');
+
+    // 3) Build and call GPT
+    const prompt = buildRagPrompt(
+      'Use the context below to answer the user:',
+      contextText,
+      query
+    );
+    const chatRes = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [{ role: 'user', content: prompt }],
+    });
+    const reply = chatRes.choices[0].message.content;
+
+    return res.json({ query, context: results, reply });
   } catch (err) {
-    console.error("❌ /voice error:", err);
-    res.status(500).send("Voice webhook failure");
+    console.error('/search-local error:', err);
+    res.status(500).json({ error: err.message });
   }
 });
 
-// Delegate to recording handler
-app.post("/process-recording", handleRecording);
-
-// Bootstrap: start server
-app.listen(PORT, () => console.log(`✅ Server listening on port ${PORT}`));
+// Start the server
+const port = process.env.PORT || 3000;
+app.listen(port, () => console.log(`✅ Server listening on port ${port}`));
