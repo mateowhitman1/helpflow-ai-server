@@ -1,4 +1,14 @@
 // processRecording.js
+/* 
+   -------------------------------------------------------------
+   Twilio recording → Whisper → RAG-enhanced GPT → ElevenLabs TTS
+   + Airtable log → Twilio playback (with Gather for next turn)
+-------------------------------------------------------------*/
+
+// Ensure File global for OpenAI uploads
+import { File } from 'node:buffer';
+if (!globalThis.File) globalThis.File = File;
+
 import os from "os";
 import axios from "axios";
 import fs from "fs";
@@ -20,14 +30,14 @@ function absoluteUrl(relativePath) {
 
 export async function handleRecording(req, res) {
   const sid = req.body.CallSid;
-  const session = await getSession(sid);             // load history
+  const session = await getSession(sid);
   const { client: clientId = "helpflow" } = req.query;
   const cfg = await getClientConfig(clientId);
   if (!cfg) return res.status(400).send("Unknown client");
 
   const { RecordingUrl, From, CallStatus, SpeechResult } = req.body;
 
-  // 1) First-round gather callback: no recording yet
+  // 1) Gather callback without recording
   if (!RecordingUrl) {
     const vr = new VoiceResponse();
     if (!SpeechResult) {
@@ -40,7 +50,7 @@ export async function handleRecording(req, res) {
       });
       return res.type("text/xml").send(vr.toString());
     }
-    // process follow-up
+    // Follow-up with session context
     const messages = [
       { role: "system", content: cfg.systemPrompt },
       ...session.history.flatMap(h => [
@@ -93,13 +103,14 @@ export async function handleRecording(req, res) {
       w.on("error", e);
     });
 
+    // Whisper transcription
     const tr = await openai.audio.transcriptions.create({
       file: fs.createReadStream(tmp),
       model: "whisper-1",
     });
     const transcript = tr.text.trim();
 
-    // 3) RAG context + GPT
+    // RAG context retrieval
     const emb = await openai.embeddings.create({
       model: "text-embedding-ada-002",
       input: transcript,
@@ -107,6 +118,7 @@ export async function handleRecording(req, res) {
     const k = await search(emb.data[0].embedding, cfg.topK || 3);
     const ctx = k.map((r,i) => `Context ${i+1}: ${r.chunk.text}`).join("\n\n");
 
+    // GPT reply with full context
     const msgs = [
       { role: "system", content: cfg.systemPrompt },
       { role: "system", content: `Use context:\n${ctx}` },
@@ -124,10 +136,11 @@ export async function handleRecording(req, res) {
     });
     const reply = cr.choices[0].message.content.trim();
 
+    // Save session
     session.history.push({ user: transcript, assistant: reply });
     await saveSession(sid, session);
 
-    // 4) TTS & log
+    // TTS & logging
     const relPath = await generateSpeech(reply, cfg.voiceId, sid);
     const play = absoluteUrl(relPath);
     await logCallToAirtable({
@@ -142,7 +155,7 @@ export async function handleRecording(req, res) {
       outcome: reply,
     });
 
-    // 5) TwiML response
+    // Play response and gather next
     const vr2 = new VoiceResponse();
     vr2.play(play);
     vr2.gather({
@@ -160,6 +173,6 @@ export async function handleRecording(req, res) {
     vrErr.say("Sorry, something went wrong.");
     return res.type("text/xml").send(vrErr.toString());
   } finally {
-    try { fs.unlinkSync(tmp); } catch {}
+    try { fs.unlinkSync(tmp); } catch {};
   }
 }
