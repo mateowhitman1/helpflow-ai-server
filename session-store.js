@@ -9,10 +9,19 @@ if (!REDIS_URL) {
   throw new Error('REDIS_URL environment variable is not set');
 }
 
-// Initialize Redis client
-// Strip leading slashes if present (Railway interpolation sometimes adds a leading slash)
-const redisUrl = REDIS_URL.startsWith('/') ? REDIS_URL.replace(/^\/+/, '') : REDIS_URL;
-const redis = new Redis(redisUrl);
+// Parse the Redis URL and initialize client
+let redis;
+try {
+  const url = new URL(REDIS_URL.trim());
+  redis = new Redis({
+    host: url.hostname,
+    port: Number(url.port),
+    password: url.password || undefined,
+  });
+} catch (err) {
+  throw new Error(`Invalid REDIS_URL (${err.message})`);
+}
+
 const TTL = SESSION_TTL_SECONDS ? Number(SESSION_TTL_SECONDS) : 3600;
 
 /**
