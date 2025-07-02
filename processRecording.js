@@ -1,125 +1,137 @@
 // processRecording.js
-/* 
-   -------------------------------------------------------------
-   Twilio recording → Whisper → RAG-enhanced GPT → ElevenLabs TTS
-   + Airtable log → Twilio playback (with Gather for next turn)
--------------------------------------------------------------*/
-
-import { File } from "node:buffer";
-if (!globalThis.File) globalThis.File = File;
-
 import os from "os";
 import axios from "axios";
 import fs from "fs";
 import path from "path";
 import { OpenAI } from "openai";
-import twilioPkg from "twilio";
+import pkg from "twilio";
 import { getClientConfig } from "./client-config.js";
 import { generateSpeech } from "./utils/elevenlabs.js";
 import { logCallToAirtable } from "./utils/airtable.js";
 import { search } from "./vectorStore.js";
+import { getSession, saveSession, clearSession } from "./session-store.js";
 
-const twilio = twilioPkg;
+const { VoiceResponse } = pkg.twiml;
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// Builds full URL for static assets
 function absoluteUrl(relativePath) {
-  const host = process.env.PUBLIC_BASE_URL;
-  return host + relativePath;
+  return new URL(relativePath, process.env.PUBLIC_BASE_URL).href;
 }
 
 export async function handleRecording(req, res) {
+  const sid = req.body.CallSid;
+  const session = await getSession(sid);             // load history
   const { client: clientId = "helpflow" } = req.query;
-  // Load dynamic client config
   const cfg = await getClientConfig(clientId);
-  if (!cfg) return res.status(400).send("Unknown client ID");
+  if (!cfg) return res.status(400).send("Unknown client");
 
-  const { RecordingUrl, From, CallSid, CallStatus, SpeechResult } = req.body;
+  const { RecordingUrl, From, CallStatus, SpeechResult } = req.body;
 
-  // Handle Gather follow-up (no new recording)
+  // 1) First-round gather callback: no recording yet
   if (!RecordingUrl) {
-    console.log("🛠️ Gather callback, SpeechResult=", SpeechResult);
-    const followChat = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      temperature: 0.6,
-      max_tokens: 120,
-      messages: [
-        { role: "system", content: cfg.systemPrompt },
-        { role: "user", content: SpeechResult },
-      ],
+    const vr = new VoiceResponse();
+    if (!SpeechResult) {
+      vr.say("Sorry, I didn't catch that. Please speak after the beep.");
+      vr.record({
+        action: `/process-recording?client=${clientId}`,
+        method: "POST",
+        maxLength: cfg.maxRecordingLength || 60,
+        playBeep: true,
+      });
+      return res.type("text/xml").send(vr.toString());
+    }
+    // process follow-up
+    const messages = [
+      { role: "system", content: cfg.systemPrompt },
+      ...session.history.flatMap(h => [
+        { role: "user", content: h.user },
+        { role: "assistant", content: h.assistant },
+      ]),
+      { role: "user", content: SpeechResult },
+    ];
+    const chat = await openai.chat.completions.create({
+      model: cfg.model || "gpt-4o-mini",
+      temperature: cfg.temperature ?? 0.6,
+      max_tokens: cfg.maxTokens ?? 120,
+      messages,
     });
-    const followUp = followChat.choices[0].message.content.trim();
+    const followup = chat.choices[0].message.content.trim();
 
-    const voiceId2 = process.env.ELEVENLABS_VOICE_ID || cfg.voiceId;
-    const relPath2 = await generateSpeech(followUp, voiceId2, `${CallSid}-followup`);
-    const playUrl2 = absoluteUrl(relPath2);
+    session.history.push({ user: SpeechResult, assistant: followup });
+    await saveSession(sid, session);
 
-    const vr2 = new twilio.twiml.VoiceResponse();
-    vr2.play(playUrl2);
-    vr2.say("Thank you for calling ${cfg.botName}. Goodbye!");
-    vr2.hangup();
-    return res.type("text/xml").send(vr2.toString());
+    const rel = await generateSpeech(followup, cfg.voiceId, `${sid}-follow`);
+    const playUrl = absoluteUrl(rel);
+
+    vr.play(playUrl);
+    vr.gather({
+      input: "speech",
+      action: `/process-recording?client=${clientId}`,
+      timeout: cfg.gatherTimeout,
+    });
+    vr.say(`Thank you for calling ${cfg.botName}. Goodbye!`);
+    vr.hangup();
+    return res.type("text/xml").send(vr.toString());
   }
 
-  let reply = "Sorry, something went wrong.";
-  const tmpFile = path.join(os.tmpdir(), `${CallSid}.mp3`);
-
+  // 2) Download & transcribe recording
+  const tmp = path.join(os.tmpdir(), `${sid}.mp3`);
   try {
-    // 1️⃣ Download audio
-    const audioUrl = RecordingUrl.endsWith('.mp3') ? RecordingUrl : `${RecordingUrl}.mp3`;
-    console.log('🛠️ [process-recording] Downloading from:', audioUrl);
-    const axiosConfig = { responseType: 'stream' };
-    if (audioUrl.includes('twilio.com')) {
-      axiosConfig.auth = {
+    const audioUrl = RecordingUrl.endsWith(".mp3") ? RecordingUrl : `${RecordingUrl}.mp3`;
+    const opts = { responseType: "stream" };
+    if (audioUrl.includes("twilio.com")) {
+      opts.auth = {
         username: process.env.TWILIO_ACCOUNT_SID,
         password: process.env.TWILIO_AUTH_TOKEN,
       };
     }
-    const audio = await axios.get(audioUrl, axiosConfig);
-    await new Promise((resolve, reject) => {
-      const writer = fs.createWriteStream(tmpFile);
-      audio.data.pipe(writer);
-      writer.on("finish", resolve);
-      writer.on("error", reject);
+    const resp = await axios.get(audioUrl, opts);
+    await new Promise((r, e) => {
+      const w = fs.createWriteStream(tmp);
+      resp.data.pipe(w);
+      w.on("finish", r);
+      w.on("error", e);
     });
 
-    // 2️⃣ Whisper transcription
-    const transcriptionRes = await openai.audio.transcriptions.create({
-      file: fs.createReadStream(tmpFile),
+    const tr = await openai.audio.transcriptions.create({
+      file: fs.createReadStream(tmp),
       model: "whisper-1",
     });
-    const transcript = transcriptionRes.text.trim();
-    console.log("📝 transcript:", transcript);
+    const transcript = tr.text.trim();
 
-    // 2.5️⃣ RAG-enhanced context retrieval
-    const embRes = await openai.embeddings.create({ model: 'text-embedding-ada-002', input: transcript });
-    const queryEmbed = embRes.data[0].embedding;
-    const ctxResults = await search(queryEmbed, 3);
-    const contextText = ctxResults.map((r, i) => `Context ${i+1}: ${r.chunk.text}`).join('\n\n');
-    console.log("🛠️ Retrieved context:\n", contextText);
-
-    // 3️⃣ GPT reply with context
-    const chatRes = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      temperature: 0.6,
-      max_tokens: 120,
-      messages: [
-        { role: "system", content: cfg.systemPrompt },
-        { role: "system", content: `Use the context below to answer user:\n${contextText}` },
-        { role: "user", content: transcript },
-      ],
+    // 3) RAG context + GPT
+    const emb = await openai.embeddings.create({
+      model: "text-embedding-ada-002",
+      input: transcript,
     });
-    reply = chatRes.choices[0].message.content.trim();
-    console.log("💬 GPT reply:", reply);
+    const k = await search(emb.data[0].embedding, cfg.topK || 3);
+    const ctx = k.map((r,i) => `Context ${i+1}: ${r.chunk.text}`).join("\n\n");
 
-    // 4️⃣ ElevenLabs TTS
-    const voiceId = process.env.ELEVENLABS_VOICE_ID || cfg.voiceId;
-    const relPath = await generateSpeech(reply, voiceId, CallSid);
-    const playUrl = absoluteUrl(relPath);
+    const msgs = [
+      { role: "system", content: cfg.systemPrompt },
+      { role: "system", content: `Use context:\n${ctx}` },
+      ...session.history.flatMap(h => [
+        { role: "user", content: h.user },
+        { role: "assistant", content: h.assistant },
+      ]),
+      { role: "user", content: transcript },
+    ];
+    const cr = await openai.chat.completions.create({
+      model: cfg.model || "gpt-4o-mini",
+      temperature: cfg.temperature ?? 0.6,
+      max_tokens: cfg.maxTokens ?? 120,
+      messages: msgs,
+    });
+    const reply = cr.choices[0].message.content.trim();
 
-    // 5️⃣ Airtable logging
+    session.history.push({ user: transcript, assistant: reply });
+    await saveSession(sid, session);
+
+    // 4) TTS & log
+    const relPath = await generateSpeech(reply, cfg.voiceId, sid);
+    const play = absoluteUrl(relPath);
     await logCallToAirtable({
-      callId: CallSid,
+      callId: sid,
       client: clientId,
       callerNumber: From,
       dateTime: new Date(),
@@ -130,25 +142,24 @@ export async function handleRecording(req, res) {
       outcome: reply,
     });
 
-    // 6️⃣ TwiML response
-    const vr = new twilio.twiml.VoiceResponse();
-    vr.play(playUrl);
-    vr.gather({ input: "speech", action: `/process-recording?client=${clientId}`, timeout: cfg.gatherTimeout });
-    vr.say(`Thank you for calling ${cfg.botName}. Goodbye!`);
-    vr.hangup();
+    // 5) TwiML response
+    const vr2 = new VoiceResponse();
+    vr2.play(play);
+    vr2.gather({
+      input: "speech",
+      action: `/process-recording?client=${clientId}`,
+      timeout: cfg.gatherTimeout,
+    });
+    vr2.say(`Thank you for calling ${cfg.botName}. Goodbye!`);
+    vr2.hangup();
+    return res.type("text/xml").send(vr2.toString());
 
-    console.log("🛠️ TwiML response:\n", vr.toString());
-    return res.type("text/xml").send(vr.toString());
   } catch (err) {
-    console.error("❌ processRecording error:", err);
-    try {
-      const vrErr = new twilio.twiml.VoiceResponse();
-      vrErr.say(reply);
-      return res.type("text/xml").send(vrErr.toString());
-    } catch {
-      return res.status(500).send("Error processing call");
-    }
+    console.error("processRecording error:", err);
+    const vrErr = new VoiceResponse();
+    vrErr.say("Sorry, something went wrong.");
+    return res.type("text/xml").send(vrErr.toString());
   } finally {
-    try { fs.unlinkSync(tmpFile); } catch {}
+    try { fs.unlinkSync(tmp); } catch {}
   }
 }

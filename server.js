@@ -2,6 +2,7 @@
 import express from 'express';
 import dotenv from 'dotenv';
 import path from 'path';
+import fs from 'fs';
 import { OpenAI } from 'openai';
 import pkg from 'twilio';
 import { getClientConfig, registerMetricsEndpoint } from './client-config.js';
@@ -15,8 +16,13 @@ const { VoiceResponse } = twiml;
 dotenv.config();
 const app = express();
 
+// Ensure audio directory exists for static serving
+const audioDir = path.join(process.cwd(), 'audio');
+if (!fs.existsSync(audioDir)) {
+  fs.mkdirSync(audioDir, { recursive: true });
+}
 // Serve static audio files from /audio
-app.use('/audio', express.static(path.join(process.cwd(), 'audio')));
+app.use('/audio', express.static(audioDir));
 
 // Parse JSON bodies (for /search-local, /config, etc.)
 app.use(express.json());
