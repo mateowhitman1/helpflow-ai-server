@@ -1,4 +1,3 @@
-// client-config.js
 import Airtable from 'airtable';
 import { LRUCache } from 'lru-cache';
 import dotenv from 'dotenv';
@@ -18,6 +17,7 @@ const schema = {
     GatherTimeout: { anyOf: [{ type: 'number' }, { type: 'string' }] },
     MaxRetries: { anyOf: [{ type: 'number' }, { type: 'string' }] },
     DataSources: { type: 'string' },
+    ModelId: { type: 'string' },    // new field for ElevenLabs TTS model
   },
   required: ['ClientID', 'BotName', 'VoiceId', 'SystemPrompt'],
   additionalProperties: true,
@@ -30,13 +30,12 @@ const validate = ajv.compile(schema);
 const defaultConfig = {
   clientId: '',
 
-  // **NEW**: core defaults if Airtable isn’t populated
+  // core defaults if Airtable isn’t populated
   botName: 'HelpFlow AI',
   voiceId: process.env.ELEVENLABS_VOICE_ID || 'EXAVITQu4vr4xnSDxMaL',
   systemPrompt:
     'You are a friendly, concise phone receptionist for HelpFlow AI. Answer clearly, briefly, and helpfully.',
-  
-  // existing defaults
+  modelId: process.env.ELEVENLABS_MODEL_ID || 'eleven_turbo_v2', // default TTS model
   gatherTimeout: 6,
   maxRetries: 2,
   dataSources: [],
@@ -80,8 +79,7 @@ export async function getClientConfig(clientId) {
     try {
       // pull up to 100 records
       const records = await base(AIRTABLE_TABLE_NAME).select({ maxRecords: 100 }).firstPage();
-      // find matching record by ClientID field
-      // Automatically detect the primary field name
+      // detect primary field
       const primaryField = Object.keys(records[0].fields)[0];
       console.log(`→ Detected primary field: ${primaryField}`);
       const record = records.find(r =>
@@ -104,6 +102,7 @@ export async function getClientConfig(clientId) {
           botName: f.BotName,
           voiceId: f.VoiceId,
           systemPrompt: f.SystemPrompt,
+          modelId: f.ModelId || defaultConfig.modelId, // include client-specific or default
           gatherTimeout: Number(f.GatherTimeout) || defaultConfig.gatherTimeout,
           maxRetries: Number(f.MaxRetries) || defaultConfig.maxRetries,
           dataSources,
