@@ -8,6 +8,7 @@ import pkg from 'twilio';
 import { getClientConfig, registerMetricsEndpoint } from './client-config.js';
 import { handleRecording } from './processRecording.js';
 import { makeVectorStore } from './vectorStore.js';
+import { generateSpeech } from './utils/elevenlabs.js';
 
 // Twilio VoiceResponse helper
 const { twiml } = pkg;
@@ -39,7 +40,7 @@ registerMetricsEndpoint(app);
 // OpenAI client
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// RAG prompt builder
+// Helper to build RAG prompt
 function buildRagPrompt(systemPrompt, contextText, userText) {
   return `
 ${systemPrompt}
@@ -50,31 +51,52 @@ ${contextText}
 
 ---
 TASK:
-If the question can be answered using the context above, provide that answer verbatim. Otherwise, respond conversationally, but do not invent unsupported policies.
+1. If the question can be answered using the context above, provide that answer verbatim.
+2. Otherwise, respond naturally as a friendly assistant, without mentioning limitations.
 
 QUESTION:
 ${userText}`.trim();
 }
 
-// Fetch client config
-app.get('/config', async (req, res) => {
-  const { client } = req.query;
-  if (!client) return res.status(400).json({ error: 'Missing client param' });
-  try {
-    const cfg = await getClientConfig(client);
-    res.json(cfg);
-  } catch (err) {
-    res.status(404).json({ error: err.message });
-  }
-});
+// Cache for greetings
+const GREET_CACHE = new Map();
 
-// Initial call - gather user input
-app.post('/voice', (req, res) => {
+// Pre-generate and cache greeting TTS
+async function getGreeting(clientId) {
+  if (GREET_CACHE.has(clientId)) return GREET_CACHE.get(clientId);
+  const cfg = await getClientConfig(clientId);
+  const greetingText = `Hello, thank you for calling ${cfg.botName}. How can I help you today?`;
+  const relPath = await generateSpeech(greetingText, cfg.voiceId, `greeting-${clientId}`, cfg.modelId);
+  const fullUrl = new URL(relPath, process.env.PUBLIC_BASE_URL).href;
+  GREET_CACHE.set(clientId, fullUrl);
+  return fullUrl;
+}
+
+// Initial call - play TTS greeting and gather input
+app.post('/voice', async (req, res) => {
+  const { client: clientId = 'helpflow' } = req.query;
   const vr = new VoiceResponse();
-  vr.say('Hello, thank you for calling HelpFlow AI. How can I help you today?');
-  vr.gather({ input: 'speech', action: '/process-recording', method: 'POST', timeout: 5, speechTimeout: 'auto' });
-  vr.say('I did not hear anything. Goodbye.');
+
+  // Play cached greeting
+  const greetUrl = await getGreeting(clientId);
+  vr.play(greetUrl);
+
+  // Gather user speech
+  const cfg = await getClientConfig(clientId);
+  vr.gather({
+    input: 'speech',
+    action: `/process-recording?client=${clientId}`,
+    method: 'POST',
+    timeout: cfg.gatherTimeout,
+    speechTimeout: 'auto'
+  });
+
+  // Fallback if no speech
+  const fallbackText = "Sorry, I didn't hear anything. Goodbye.";
+  const fallbackPath = await generateSpeech(fallbackText, cfg.voiceId, `fallback-${clientId}`, cfg.modelId);
+  vr.play(fallbackPath);
   vr.hangup();
+
   res.type('text/xml').send(vr.toString());
 });
 
@@ -87,17 +109,21 @@ app.post('/search-local', async (req, res) => {
     const { client, query } = req.body;
     if (!client || !query) return res.status(400).json({ error: 'Missing client or query' });
 
+    // Fetch client system prompt
+    const cfg = await getClientConfig(client);
+    const systemPrompt = cfg.systemPrompt;
+
     // Embed query
     const embRes = await openai.embeddings.create({ model: 'text-embedding-ada-002', input: query });
     const queryEmbed = embRes.data[0].embedding;
 
     // Vector search
     const vs = makeVectorStore(client);
-    const results = await vs.search(queryEmbed, 5);
+    const results = await vs.search(queryEmbed, cfg.topK || 5);
     const contextText = results.map((r, i) => `Context ${i+1}: ${r.chunk.text}`).join('\n\n');
 
     // GPT completion
-    const prompt = buildRagPrompt('Use the context below to answer the user:', contextText, query);
+    const prompt = buildRagPrompt(systemPrompt, contextText, query);
     const chatRes = await openai.chat.completions.create({ model: 'gpt-3.5-turbo', messages: [{ role: 'user', content: prompt }] });
     const reply = chatRes.choices[0].message.content;
 
