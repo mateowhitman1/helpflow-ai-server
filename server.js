@@ -2,12 +2,13 @@
 import express from 'express';
 import dotenv from 'dotenv';
 import { OpenAI } from 'openai';
-import { twiml } from 'twilio';
+import pkg from 'twilio';
 import { getClientConfig, registerMetricsEndpoint } from './client-config.js';
 import { handleRecording } from './processRecording.js';
 import { search } from './vectorStore.js';
 
 // Twilio VoiceResponse helper
+const { twiml } = pkg;
 const { VoiceResponse } = twiml;
 
 dotenv.config();
@@ -107,4 +108,3 @@ app.post('/search-local', async (req, res) => {
 // Start the server
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`✅ Server listening on port ${port}`));
-
