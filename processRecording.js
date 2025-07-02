@@ -1,8 +1,8 @@
-/* 
-   -------------------------------------------------------------
-   Twilio recording → Whisper → RAG-enhanced GPT → ElevenLabs TTS
-   + Airtable log → Twilio playback (with Gather for next turn)
--------------------------------------------------------------*/
+//
+   //-------------------------------------------------------------
+   //Twilio recording → Whisper → RAG-enhanced GPT → ElevenLabs TTS
+   //+ Airtable log → Twilio playback (with Gather for next turn)
+//-------------------------------------------------------------*/
 
 // Ensure File global for OpenAI uploads
 import { File } from 'node:buffer';
@@ -38,7 +38,8 @@ ${contextText}
 
 ---
 TASK:
-If the question can be answered using the context above, provide that answer verbatim. Otherwise, respond conversationally as a friendly assistant.
+1. If the user's question can be answered using the context above, provide that answer verbatim.
+2. Otherwise, respond naturally as a friendly assistant, engaging conversationally without stating limitations like \"I can't provide live data\" or refusing to answer.
 
 QUESTION:
 ${userText}`.trim();
@@ -70,10 +71,10 @@ export async function handleRecording(req, res) {
       return res.type("text/xml").send(vr.toString());
     }
 
-    // Compose unified prompt
+    // Compose unified prompt for follow-up
     const prompt = buildRagPrompt(
       cfg.systemPrompt,
-      '', // no new context on follow-up, rely on history
+      '', // no new context
       SpeechResult
     );
     const followChat = await openai.chat.completions.create({
@@ -104,7 +105,7 @@ export async function handleRecording(req, res) {
     const opts = { responseType: "stream" };
     if (audioUrl.includes("twilio.com")) opts.auth = { username: process.env.TWILIO_ACCOUNT_SID, password: process.env.TWILIO_AUTH_TOKEN };
     const resp = await axios.get(audioUrl, opts);
-    await new Promise((r,e) => { const w = fs.createWriteStream(tmp); resp.data.pipe(w); w.on("finish", r); w.on("error", e); });
+    await new Promise((r, e) => { const w = fs.createWriteStream(tmp); resp.data.pipe(w); w.on("finish", r); w.on("error", e); });
 
     const tr = await openai.audio.transcriptions.create({ file: fs.createReadStream(tmp), model: "whisper-1" });
     const transcript = tr.text.trim();
@@ -112,7 +113,7 @@ export async function handleRecording(req, res) {
     // RAG: embed, search
     const embRes = await openai.embeddings.create({ model: 'text-embedding-ada-002', input: transcript });
     const results = await vs.search(embRes.data[0].embedding, cfg.topK || 3);
-    const contextText = results.map((r, i) => `Context ${i+1}: ${r.chunk.text}`).join("\n\n");
+    const contextText = results.map((r, i) => `Context ${i + 1}: ${r.chunk.text}`).join("\n\n");
 
     // Compose unified prompt
     const prompt = buildRagPrompt(
