@@ -1,5 +1,4 @@
-// processRecording.js
-/* 
+/*
    -------------------------------------------------------------
    Twilio recording → Whisper → RAG-enhanced GPT → ElevenLabs TTS
    + Airtable log → Twilio playback (with Gather for next turn)
@@ -22,6 +21,11 @@ import { search } from "./vectorStore.js";
 import { getSession, saveSession, clearSession } from "./session-store.js";
 
 const { VoiceResponse } = pkg.twiml;
+// Default to faster model
+const DEFAULT_MODEL = "gpt-3.5-turbo";
+// Lower token limit for quicker responses
+const DEFAULT_MAX_TOKENS = 80;
+
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 function absoluteUrl(relativePath) {
@@ -37,11 +41,11 @@ export async function handleRecording(req, res) {
 
   const { RecordingUrl, From, CallStatus, SpeechResult } = req.body;
 
-  // 1) Gather callback without recording
+  // 1) Handle follow-up gather (no recording URL)
   if (!RecordingUrl) {
     const vr = new VoiceResponse();
     if (!SpeechResult) {
-      vr.say("Sorry, I didn't catch that. Please speak after the beep.");
+      vr.say("Sorry, I didn't catch that. Please try again.");
       vr.record({
         action: `/process-recording?client=${clientId}`,
         method: "POST",
@@ -50,7 +54,8 @@ export async function handleRecording(req, res) {
       });
       return res.type("text/xml").send(vr.toString());
     }
-    // Follow-up with session context
+
+    // Build messages with history
     const messages = [
       { role: "system", content: cfg.systemPrompt },
       ...session.history.flatMap(h => [
@@ -59,10 +64,11 @@ export async function handleRecording(req, res) {
       ]),
       { role: "user", content: SpeechResult },
     ];
+
     const chat = await openai.chat.completions.create({
-      model: cfg.model || "gpt-4o-mini",
+      model: cfg.model || DEFAULT_MODEL,
       temperature: cfg.temperature ?? 0.6,
-      max_tokens: cfg.maxTokens ?? 120,
+      max_tokens: cfg.maxTokens ?? DEFAULT_MAX_TOKENS,
       messages,
     });
     const followup = chat.choices[0].message.content.trim();
@@ -74,13 +80,10 @@ export async function handleRecording(req, res) {
     const playUrl = absoluteUrl(rel);
 
     vr.play(playUrl);
-    vr.gather({
-      input: "speech",
-      action: `/process-recording?client=${clientId}`,
-      timeout: cfg.gatherTimeout,
-    });
+    vr.gather({ input: "speech", action: `/process-recording?client=${clientId}`, timeout: cfg.gatherTimeout });
     vr.say(`Thank you for calling ${cfg.botName}. Goodbye!`);
     vr.hangup();
+
     return res.type("text/xml").send(vr.toString());
   }
 
@@ -90,10 +93,7 @@ export async function handleRecording(req, res) {
     const audioUrl = RecordingUrl.endsWith(".mp3") ? RecordingUrl : `${RecordingUrl}.mp3`;
     const opts = { responseType: "stream" };
     if (audioUrl.includes("twilio.com")) {
-      opts.auth = {
-        username: process.env.TWILIO_ACCOUNT_SID,
-        password: process.env.TWILIO_AUTH_TOKEN,
-      };
+      opts.auth = { username: process.env.TWILIO_ACCOUNT_SID, password: process.env.TWILIO_AUTH_TOKEN };
     }
     const resp = await axios.get(audioUrl, opts);
     await new Promise((r, e) => {
@@ -103,22 +103,15 @@ export async function handleRecording(req, res) {
       w.on("error", e);
     });
 
-    // Whisper transcription
-    const tr = await openai.audio.transcriptions.create({
-      file: fs.createReadStream(tmp),
-      model: "whisper-1",
-    });
+    const tr = await openai.audio.transcriptions.create({ file: fs.createReadStream(tmp), model: "whisper-1" });
     const transcript = tr.text.trim();
 
-    // RAG context retrieval
-    const emb = await openai.embeddings.create({
-      model: "text-embedding-ada-002",
-      input: transcript,
-    });
+    // RAG context
+    const emb = await openai.embeddings.create({ model: "text-embedding-ada-002", input: transcript });
     const k = await search(emb.data[0].embedding, cfg.topK || 3);
     const ctx = k.map((r,i) => `Context ${i+1}: ${r.chunk.text}`).join("\n\n");
 
-    // GPT reply with full context
+    // GPT reply
     const msgs = [
       { role: "system", content: cfg.systemPrompt },
       { role: "system", content: `Use context:\n${ctx}` },
@@ -129,40 +122,23 @@ export async function handleRecording(req, res) {
       { role: "user", content: transcript },
     ];
     const cr = await openai.chat.completions.create({
-      model: cfg.model || "gpt-4o-mini",
+      model: cfg.model || DEFAULT_MODEL,
       temperature: cfg.temperature ?? 0.6,
-      max_tokens: cfg.maxTokens ?? 120,
+      max_tokens: cfg.maxTokens ?? DEFAULT_MAX_TOKENS,
       messages: msgs,
     });
     const reply = cr.choices[0].message.content.trim();
 
-    // Save session
     session.history.push({ user: transcript, assistant: reply });
     await saveSession(sid, session);
 
-    // TTS & logging
     const relPath = await generateSpeech(reply, cfg.voiceId, sid);
     const play = absoluteUrl(relPath);
-    await logCallToAirtable({
-      callId: sid,
-      client: clientId,
-      callerNumber: From,
-      dateTime: new Date(),
-      callStatus: CallStatus,
-      recordingUrl: audioUrl,
-      transcript,
-      intent: "",
-      outcome: reply,
-    });
+    await logCallToAirtable({ callId: sid, client: clientId, callerNumber: From, dateTime: new Date(), callStatus: CallStatus, recordingUrl: audioUrl, transcript, intent: "", outcome: reply });
 
-    // Play response and gather next
     const vr2 = new VoiceResponse();
     vr2.play(play);
-    vr2.gather({
-      input: "speech",
-      action: `/process-recording?client=${clientId}`,
-      timeout: cfg.gatherTimeout,
-    });
+    vr2.gather({ input: "speech", action: `/process-recording?client=${clientId}`, timeout: cfg.gatherTimeout });
     vr2.say(`Thank you for calling ${cfg.botName}. Goodbye!`);
     vr2.hangup();
     return res.type("text/xml").send(vr2.toString());
