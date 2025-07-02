@@ -9,6 +9,10 @@ import { getClientConfig, registerMetricsEndpoint } from './client-config.js';
 import { handleRecording } from './processRecording.js';
 import { search } from './vectorStore.js';
 
+// Twilio VoiceResponse helper
+const { twiml } = pkg;
+const { VoiceResponse } = twiml;
+
 dotenv.config();
 const app = express();
 
@@ -60,13 +64,22 @@ app.get('/config', async (req, res) => {
   }
 });
 
-// Initial Twilio webhook: prompt & record
+// Initial Twilio webhook: prompt user via <Gather> for natural conversational flow
 app.post('/voice', (req, res) => {
-  const { VoiceResponse } = pkg.twiml;
   const vr = new VoiceResponse();
-  vr.say('Welcome to HelpFlow AI. Please ask your question after the beep.');
-  vr.record({ action: '/process-recording', method: 'POST', maxLength: 60, playBeep: true });
+  // Ask open-ended question and listen for speech
+  vr.say('Hello, thank you for calling HelpFlow AI. How can I help you today?');
+  vr.gather({
+    input: 'speech',
+    action: '/process-recording',
+    method: 'POST',
+    timeout: 5,
+    speechTimeout: 'auto'
+  });
+  // If no speech detected
+  vr.say('I did not hear anything. Goodbye.');
   vr.hangup();
+
   res.type('text/xml').send(vr.toString());
 });
 
