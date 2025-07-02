@@ -9,23 +9,17 @@ if (!REDIS_URL) {
   throw new Error('REDIS_URL environment variable is not set');
 }
 
-// Parse the Redis URL
-const url = new URL(REDIS_URL.trim());
+// Trim whitespace
+const redisUrl = REDIS_URL.trim();
 
-// Build ioredis options
-const redisOptions = {
-  // Use the raw connection string
-  url: REDIS_URL.trim(),
-};
-
-// Upstash (and many managed Redis) require TLS even over redis:// protocol
-// Enable TLS for Upstash by default if host ends with upstash.io
-if (url.host.endsWith('upstash.io')) {
-  redisOptions.tls = {};
+// Determine options: Upstash requires TLS
+const options = {};
+if (redisUrl.includes('upstash.io')) {
+  options.tls = {};
 }
 
-// Initialize Redis client
-const redis = new Redis(redisOptions);
+// Initialize Redis client using connection string + options
+const redis = new Redis(redisUrl, options);
 
 const TTL = SESSION_TTL_SECONDS ? Number(SESSION_TTL_SECONDS) : 3600;
 
