@@ -45,6 +45,26 @@ function buildRagPrompt(systemPrompt, contextText, userText) {
   return `
 ${systemPrompt}
 
+Here is some context from the client's knowledge base:
+${contextText}
+
+Instructions:
+- If the user's question can be answered using the context above, use only that information.
+- If the user's question is outside the context, have a natural, conversational response as a friendly AI assistant.
+
+User's question:
+${userText}`.trim();
+}
+
+Use ONLY the context below to answer the user's question. Do NOT hallucinate or provide information not contained in the context. If the answer isn't in the context, respond with "I don't know.".
+
+Context:
+${contextText}
+
+Question:
+${userText}`.trim();
+}
+
 Context:
 ${contextText}
 
