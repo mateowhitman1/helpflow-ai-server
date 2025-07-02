@@ -56,22 +56,6 @@ User's question:
 ${userText}`.trim();
 }
 
-Use ONLY the context below to answer the user's question. Do NOT hallucinate or provide information not contained in the context. If the answer isn't in the context, respond with "I don't know.".
-
-Context:
-${contextText}
-
-Question:
-${userText}`.trim();
-}
-
-Context:
-${contextText}
-
-User:
-${userText}`.trim();
-}
-
 // Config fetch
 app.get('/config', async (req, res) => {
   const { client } = req.query;
@@ -116,7 +100,7 @@ app.post('/search-local', async (req, res) => {
     const embRes = await openai.embeddings.create({ model: 'text-embedding-ada-002', input: query });
     const queryEmbed = embRes.data[0].embedding;
 
-    // Initialize per-client vector store and search
+    // 2) Initialize per-client vector store and search
     const vs = makeVectorStore(client);
     const results = await vs.search(queryEmbed, 5);
     const contextText = results.map((r, i) => `Context ${i+1}: ${r.chunk.text}`).join('\n\n');
