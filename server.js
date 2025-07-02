@@ -9,24 +9,25 @@ import { getClientConfig, registerMetricsEndpoint } from './client-config.js';
 import { handleRecording } from './processRecording.js';
 import { search } from './vectorStore.js';
 
-// Twilio VoiceResponse helper
-const { twiml } = pkg;
-const { VoiceResponse } = twiml;
-
 dotenv.config();
 const app = express();
 
-// Ensure audio directory exists for static serving
-const audioDir = path.join(process.cwd(), 'audio');
-if (!fs.existsSync(audioDir)) {
-  fs.mkdirSync(audioDir, { recursive: true });
-}
-// Serve static audio files from /audio
+// Configure audio directory for TTS files
+const audioDir = path.join(process.cwd(), 'public', 'audio');
+if (!fs.existsSync(audioDir)) fs.mkdirSync(audioDir, { recursive: true });
+// Serve static audio files at /audio
 app.use('/audio', express.static(audioDir));
 
-// Parse JSON bodies (for /search-local, /config, etc.)
+// Debug endpoint: list audio files
+app.get('/debug/audio', (req, res) => {
+  fs.readdir(audioDir, (err, files) => {
+    if (err) return res.status(500).json({ error: 'Cannot read audio directory', details: err.message });
+    res.json({ files });
+  });
+});
+
+// Parse incoming requests
 app.use(express.json());
-// Parse x-www-form-urlencoded bodies (Twilio sends form data)
 app.use(express.urlencoded({ extended: false }));
 
 // Expose cache metrics for client-config
@@ -35,7 +36,7 @@ registerMetricsEndpoint(app);
 // Initialize OpenAI client
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// Helper to build a consistent RAG prompt
+// Helper to build RAG prompt
 function buildRagPrompt(systemPrompt, contextText, userText) {
   return `
 ${systemPrompt}
@@ -47,7 +48,7 @@ User:
 ${userText}`.trim();
 }
 
-// Config fetch route
+// Config fetch
 app.get('/config', async (req, res) => {
   const { client } = req.query;
   if (!client) return res.status(400).json({ error: 'Missing client param' });
@@ -59,22 +60,17 @@ app.get('/config', async (req, res) => {
   }
 });
 
-// Initial call handler: prompt & record
+// Initial Twilio webhook: prompt & record
 app.post('/voice', (req, res) => {
-  const response = new VoiceResponse();
-  response.say('Welcome to HelpFlow AI. Please ask your question after the beep.');
-  response.record({
-    action: '/process-recording',
-    method: 'POST',
-    maxLength: 60,
-    playBeep: true
-  });
-  response.hangup();
-
-  res.type('text/xml').send(response.toString());
+  const { VoiceResponse } = pkg.twiml;
+  const vr = new VoiceResponse();
+  vr.say('Welcome to HelpFlow AI. Please ask your question after the beep.');
+  vr.record({ action: '/process-recording', method: 'POST', maxLength: 60, playBeep: true });
+  vr.hangup();
+  res.type('text/xml').send(vr.toString());
 });
 
-// Post-recording webhook: process the recording
+// Post-recording handler
 app.post('/process-recording', handleRecording);
 
 // Standalone RAG endpoint
@@ -83,38 +79,22 @@ app.post('/search-local', async (req, res) => {
     const { query } = req.body;
     if (!query) return res.status(400).json({ error: 'Missing query' });
 
-    // 1) Embed the user query
-    const embRes = await openai.embeddings.create({
-      model: 'text-embedding-ada-002',
-      input: query,
-    });
-    const queryEmbed = embRes.data[0].embedding;
+    // Embed & retrieve context
+    const embRes = await openai.embeddings.create({ model: 'text-embedding-ada-002', input: query });
+    const results = await search(embRes.data[0].embedding, 5);
+    const contextText = results.map((r, i) => `Context ${i+1}: ${r.chunk.text}`).join('\n\n');
 
-    // 2) Retrieve top-5 context chunks
-    const results = await search(queryEmbed, 5);
-    const contextText = results
-      .map((r, i) => `Context ${i + 1}: ${r.chunk.text}`)
-      .join('\n\n');
-
-    // 3) Build and call GPT
-    const prompt = buildRagPrompt(
-      'Use the context below to answer the user:',
-      contextText,
-      query
-    );
-    const chatRes = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [{ role: 'user', content: prompt }],
-    });
+    // Build & call GPT
+    const prompt = buildRagPrompt('Use the context below to answer the user:', contextText, query);
+    const chatRes = await openai.chat.completions.create({ model: 'gpt-4o-mini', messages: [{ role: 'user', content: prompt }] });
     const reply = chatRes.choices[0].message.content;
-
-    return res.json({ query, context: results, reply });
+    res.json({ query, context: results, reply });
   } catch (err) {
     console.error('/search-local error:', err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// Start the server
+// Start server
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`✅ Server listening on port ${port}`));
