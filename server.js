@@ -5,10 +5,16 @@ import { OpenAI } from 'openai';
 import { getClientConfig, registerMetricsEndpoint } from './client-config.js';
 import { handleRecording } from './processRecording.js';
 import { search } from './vectorStore.js';
+// If you’ve extracted session logic, import it too (optional here):
+// import './session-store.js';
 
 dotenv.config();
 const app = express();
+
+// Parse JSON bodies (for /search-local, /config, etc.)
 app.use(express.json());
+// Parse x-www-form-urlencoded bodies (Twilio will POST form data)
+app.use(express.urlencoded({ extended: false }));
 
 // Expose cache metrics for client-config
 registerMetricsEndpoint(app);
@@ -40,7 +46,8 @@ app.get('/config', async (req, res) => {
   }
 });
 
-// Twilio webhook route
+// Twilio incoming-call webhook — handle both /voice and /process-recording
+app.post('/voice', handleRecording);
 app.post('/process-recording', handleRecording);
 
 // Standalone RAG endpoint
@@ -58,7 +65,9 @@ app.post('/search-local', async (req, res) => {
 
     // 2) Retrieve top-5 context chunks
     const results = await search(queryEmbed, 5);
-    const contextText = results.map((r, i) => `Context ${i+1}: ${r.chunk.text}`).join('\n\n');
+    const contextText = results
+      .map((r, i) => `Context ${i + 1}: ${r.chunk.text}`)
+      .join('\n\n');
 
     // 3) Build and call GPT
     const prompt = buildRagPrompt(
