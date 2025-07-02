@@ -10,7 +10,9 @@ if (!REDIS_URL) {
 }
 
 // Initialize Redis client
-const redis = new Redis(REDIS_URL);
+// Strip leading slashes if present (Railway interpolation sometimes adds a leading slash)
+const redisUrl = REDIS_URL.startsWith('/') ? REDIS_URL.replace(/^\/+/, '') : REDIS_URL;
+const redis = new Redis(redisUrl);
 const TTL = SESSION_TTL_SECONDS ? Number(SESSION_TTL_SECONDS) : 3600;
 
 /**
