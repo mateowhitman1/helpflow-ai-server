@@ -16,13 +16,12 @@ const { VoiceResponse } = twiml;
 dotenv.config();
 const app = express();
 
-// Configure audio directory for TTS files
+// Serve static audio files
 const audioDir = path.join(process.cwd(), 'public', 'audio');
 if (!fs.existsSync(audioDir)) fs.mkdirSync(audioDir, { recursive: true });
-// Serve static audio files at /audio
 app.use('/audio', express.static(audioDir));
 
-// Debug endpoint: list audio files
+// Debug endpoint for audio files
 app.get('/debug/audio', (req, res) => {
   fs.readdir(audioDir, (err, files) => {
     if (err) return res.status(500).json({ error: 'Cannot read audio directory', details: err.message });
@@ -30,33 +29,34 @@ app.get('/debug/audio', (req, res) => {
   });
 });
 
-// Parse incoming requests
+// Parse JSON and form data
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
-// Expose cache metrics for client-config
+// Cache metrics endpoint
 registerMetricsEndpoint(app);
 
-// Initialize OpenAI client
+// OpenAI client
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// Helper to build RAG prompt
+// RAG prompt builder
 function buildRagPrompt(systemPrompt, contextText, userText) {
   return `
 ${systemPrompt}
 
-Here is some context from the client's knowledge base:
+---
+CONTEXT (use only for answers):
 ${contextText}
 
-Instructions:
-- If the user's question can be answered using the context above, use only that information.
-- If the user's question is outside the context, have a natural, conversational response as a friendly AI assistant.
+---
+TASK:
+If the question can be answered using the context above, provide that answer verbatim. Otherwise, respond conversationally, but do not invent unsupported policies.
 
-User's question:
+QUESTION:
 ${userText}`.trim();
 }
 
-// Config fetch
+// Fetch client config
 app.get('/config', async (req, res) => {
   const { client } = req.query;
   if (!client) return res.status(400).json({ error: 'Missing client param' });
@@ -68,26 +68,17 @@ app.get('/config', async (req, res) => {
   }
 });
 
-// Initial Twilio webhook: prompt user via <Gather> for natural conversational flow
+// Initial call - gather user input
 app.post('/voice', (req, res) => {
   const vr = new VoiceResponse();
-  // Ask open-ended question and listen for speech
   vr.say('Hello, thank you for calling HelpFlow AI. How can I help you today?');
-  vr.gather({
-    input: 'speech',
-    action: '/process-recording',
-    method: 'POST',
-    timeout: 5,
-    speechTimeout: 'auto'
-  });
-  // If no speech detected
+  vr.gather({ input: 'speech', action: '/process-recording', method: 'POST', timeout: 5, speechTimeout: 'auto' });
   vr.say('I did not hear anything. Goodbye.');
   vr.hangup();
-
   res.type('text/xml').send(vr.toString());
 });
 
-// Post-recording handler
+// Recording handler
 app.post('/process-recording', handleRecording);
 
 // Standalone RAG endpoint
@@ -96,21 +87,21 @@ app.post('/search-local', async (req, res) => {
     const { client, query } = req.body;
     if (!client || !query) return res.status(400).json({ error: 'Missing client or query' });
 
-    // 1) Embed the user query
+    // Embed query
     const embRes = await openai.embeddings.create({ model: 'text-embedding-ada-002', input: query });
     const queryEmbed = embRes.data[0].embedding;
 
-    // 2) Initialize per-client vector store and search
+    // Vector search
     const vs = makeVectorStore(client);
     const results = await vs.search(queryEmbed, 5);
     const contextText = results.map((r, i) => `Context ${i+1}: ${r.chunk.text}`).join('\n\n');
 
-    // 3) Build and call GPT
+    // GPT completion
     const prompt = buildRagPrompt('Use the context below to answer the user:', contextText, query);
     const chatRes = await openai.chat.completions.create({ model: 'gpt-3.5-turbo', messages: [{ role: 'user', content: prompt }] });
     const reply = chatRes.choices[0].message.content;
 
-    return res.json({ client, query, context: results, reply });
+    res.json({ client, query, context: results, reply });
   } catch (err) {
     console.error('/search-local error:', err);
     res.status(500).json({ error: err.message });
