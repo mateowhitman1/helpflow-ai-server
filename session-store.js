@@ -9,8 +9,8 @@ if (!REDIS_URL) {
   throw new Error('REDIS_URL environment variable is not set');
 }
 
-// Initialize Redis client using URL option (handles full redis:// URL)
-const redis = new Redis({ url: REDIS_URL });
+// Initialize Redis client directly with connection string
+const redis = new Redis(REDIS_URL);
 
 const TTL = SESSION_TTL_SECONDS ? Number(SESSION_TTL_SECONDS) : 3600;
 
