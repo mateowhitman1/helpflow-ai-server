@@ -1,4 +1,3 @@
-// processRecording.js
 /* 
    -------------------------------------------------------------
    Twilio recording → Whisper → RAG-enhanced GPT → ElevenLabs TTS
@@ -27,6 +26,24 @@ const DEFAULT_MAX_TOKENS = 80;
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
+/**
+ * Build a unified RAG + freeform prompt
+ */
+function buildRagPrompt(systemPrompt, contextText, userText) {
+  return `${systemPrompt}
+
+---
+CONTEXT (use only for answers):
+${contextText}
+
+---
+TASK:
+If the question can be answered using the context above, provide that answer verbatim. Otherwise, respond conversationally as a friendly assistant.
+
+QUESTION:
+${userText}`.trim();
+}
+
 function absoluteUrl(relativePath) {
   return new URL(relativePath, process.env.PUBLIC_BASE_URL).href;
 }
@@ -40,7 +57,6 @@ export async function handleRecording(req, res) {
 
   // Initialize per-client vector store
   const vs = makeVectorStore(clientId);
-
   const { RecordingUrl, From, CallStatus, SpeechResult } = req.body;
 
   // 1) Handle follow-up without new recording
@@ -54,14 +70,19 @@ export async function handleRecording(req, res) {
       return res.type("text/xml").send(vr.toString());
     }
 
-    // Build chat history
-    const messages = [
-      { role: "system", content: cfg.systemPrompt },
-      ...session.history.flatMap(h => [ { role: "user", content: h.user }, { role: "assistant", content: h.assistant } ]),
-      { role: "user", content: SpeechResult },
-    ];
-    const chat = await openai.chat.completions.create({ model: cfg.model || DEFAULT_MODEL, temperature: cfg.temperature ?? 0.6, max_tokens: cfg.maxTokens ?? DEFAULT_MAX_TOKENS, messages });
-    const followup = chat.choices[0].message.content.trim();
+    // Compose unified prompt
+    const prompt = buildRagPrompt(
+      cfg.systemPrompt,
+      '', // no new context on follow-up, rely on history
+      SpeechResult
+    );
+    const followChat = await openai.chat.completions.create({
+      model: cfg.model || DEFAULT_MODEL,
+      temperature: cfg.temperature ?? 0.6,
+      max_tokens: cfg.maxTokens ?? DEFAULT_MAX_TOKENS,
+      messages: [{ role: 'user', content: prompt }],
+    });
+    const followup = followChat.choices[0].message.content.trim();
 
     session.history.push({ user: SpeechResult, assistant: followup });
     await saveSession(sid, session);
@@ -88,19 +109,24 @@ export async function handleRecording(req, res) {
     const tr = await openai.audio.transcriptions.create({ file: fs.createReadStream(tmp), model: "whisper-1" });
     const transcript = tr.text.trim();
 
-    // RAG: embed, search, build context
-    const emb = await openai.embeddings.create({ model: 'text-embedding-ada-002', input: transcript });
-    const results = await vs.search(emb.data[0].embedding, cfg.topK || 3);
+    // RAG: embed, search
+    const embRes = await openai.embeddings.create({ model: 'text-embedding-ada-002', input: transcript });
+    const results = await vs.search(embRes.data[0].embedding, cfg.topK || 3);
     const contextText = results.map((r, i) => `Context ${i+1}: ${r.chunk.text}`).join("\n\n");
 
-    const messages = [
-      { role: 'system', content: cfg.systemPrompt },
-      { role: 'system', content: contextText },
-      ...session.history.flatMap(h => [ { role: 'user', content: h.user }, { role: 'assistant', content: h.assistant } ]),
-      { role: 'user', content: transcript }
-    ];
-    const cr = await openai.chat.completions.create({ model: cfg.model || DEFAULT_MODEL, temperature: cfg.temperature ?? 0.6, max_tokens: cfg.maxTokens ?? DEFAULT_MAX_TOKENS, messages });
-    const reply = cr.choices[0].message.content.trim();
+    // Compose unified prompt
+    const prompt = buildRagPrompt(
+      cfg.systemPrompt,
+      contextText,
+      transcript
+    );
+    const chatRes = await openai.chat.completions.create({
+      model: cfg.model || DEFAULT_MODEL,
+      temperature: cfg.temperature ?? 0.6,
+      max_tokens: cfg.maxTokens ?? DEFAULT_MAX_TOKENS,
+      messages: [{ role: 'user', content: prompt }],
+    });
+    const reply = chatRes.choices[0].message.content.trim();
 
     session.history.push({ user: transcript, assistant: reply });
     await saveSession(sid, session);
