@@ -26,7 +26,7 @@ export async function generateSpeech(text, voiceId, callId) {
   const response = await axios({
     method: "POST",
     url,
-    responseType: "stream",                   // << audio stream!
+    responseType: "stream",  // << audio stream!
     headers: {
       "xi-api-key": process.env.ELEVENLABS_API_KEY,
       "Content-Type": "application/json",
@@ -34,24 +34,25 @@ export async function generateSpeech(text, voiceId, callId) {
     },
     data: {
       text,
-      model_id: "eleven_turbo_v2",            // cheaper / faster
+      model_id: "eleven_turbo_v2",
       voice_settings: { stability: 0.5, similarity_boost: 0.5 },
     },
   });
 
-  /* ---- 2. save to  public/audio/<CallSid>.mp3  --------------------------- */
+  /* ---- 2. save to public/audio/<callId>.mp3 --------------------------- */
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
-  const outDir    = path.join(__dirname, "..", "public", "audio");
+  const outDir = path.join(__dirname, "..", "public", "audio");
   if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
 
   const outFile = path.join(outDir, `${callId}.mp3`);
   await new Promise((resolve, reject) => {
-    const w = fs.createWriteStream(outFile);
-    response.data.pipe(w);
-    w.on("finish", resolve);
-    w.on("error",  reject);
+    const writer = fs.createWriteStream(outFile);
+    response.data.pipe(writer);
+    writer.on("finish", resolve);
+    writer.on("error", reject);
   });
 
+  // Debug: confirm file write
   console.log(`Wrote TTS file to ${outFile}`);
 
   /* ---- 3. return URL that server.js exposes via express.static ----------- */
