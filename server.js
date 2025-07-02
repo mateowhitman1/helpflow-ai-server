@@ -7,7 +7,7 @@ import { OpenAI } from 'openai';
 import pkg from 'twilio';
 import { getClientConfig, registerMetricsEndpoint } from './client-config.js';
 import { handleRecording } from './processRecording.js';
-import { search } from './vectorStore.js';
+import { makeVectorStore } from './vectorStore.js';
 
 // Twilio VoiceResponse helper
 const { twiml } = pkg;
@@ -89,19 +89,24 @@ app.post('/process-recording', handleRecording);
 // Standalone RAG endpoint
 app.post('/search-local', async (req, res) => {
   try {
-    const { query } = req.body;
-    if (!query) return res.status(400).json({ error: 'Missing query' });
+    const { client, query } = req.body;
+    if (!client || !query) return res.status(400).json({ error: 'Missing client or query' });
 
-    // Embed & retrieve context
+    // 1) Embed the user query
     const embRes = await openai.embeddings.create({ model: 'text-embedding-ada-002', input: query });
-    const results = await search(embRes.data[0].embedding, 5);
+    const queryEmbed = embRes.data[0].embedding;
+
+    // Initialize per-client vector store and search
+    const vs = makeVectorStore(client);
+    const results = await vs.search(queryEmbed, 5);
     const contextText = results.map((r, i) => `Context ${i+1}: ${r.chunk.text}`).join('\n\n');
 
-    // Build & call GPT
+    // 3) Build and call GPT
     const prompt = buildRagPrompt('Use the context below to answer the user:', contextText, query);
-    const chatRes = await openai.chat.completions.create({ model: 'gpt-4o-mini', messages: [{ role: 'user', content: prompt }] });
+    const chatRes = await openai.chat.completions.create({ model: 'gpt-3.5-turbo', messages: [{ role: 'user', content: prompt }] });
     const reply = chatRes.choices[0].message.content;
-    res.json({ query, context: results, reply });
+
+    return res.json({ client, query, context: results, reply });
   } catch (err) {
     console.error('/search-local error:', err);
     res.status(500).json({ error: err.message });
