@@ -4,21 +4,13 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-let { REDIS_URL, SESSION_TTL_SECONDS } = process.env;
+const { REDIS_URL, SESSION_TTL_SECONDS } = process.env;
 if (!REDIS_URL) {
   throw new Error('REDIS_URL environment variable is not set');
 }
 
-// Remove leading slashes that may sneak in
-REDIS_URL = REDIS_URL.trim().replace(/^\/+/, '');
-
-// Initialize Redis client using full URL
-let redis;
-try {
-  redis = new Redis(REDIS_URL);
-} catch (err) {
-  throw new Error(`Failed to initialize Redis client: ${err.message}`);
-}
+// Initialize Redis client using URL option (handles full redis:// URL)
+const redis = new Redis({ url: REDIS_URL });
 
 const TTL = SESSION_TTL_SECONDS ? Number(SESSION_TTL_SECONDS) : 3600;
 
