@@ -4,6 +4,7 @@ import axios from "axios";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+
 console.log(
   "ElevenLabs key in memory →",
   process.env.ELEVENLABS_API_KEY?.slice(0, 8) + "…"
@@ -50,6 +51,8 @@ export async function generateSpeech(text, voiceId, callId) {
     w.on("finish", resolve);
     w.on("error",  reject);
   });
+
+  console.log(`Wrote TTS file to ${outFile}`);
 
   /* ---- 3. return URL that server.js exposes via express.static ----------- */
   return `/audio/${callId}.mp3`;
