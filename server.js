@@ -2,18 +2,20 @@
 import express from 'express';
 import dotenv from 'dotenv';
 import { OpenAI } from 'openai';
+import { twiml } from 'twilio';
 import { getClientConfig, registerMetricsEndpoint } from './client-config.js';
 import { handleRecording } from './processRecording.js';
 import { search } from './vectorStore.js';
-// If you’ve extracted session logic, import it too (optional here):
-// import './session-store.js';
+
+// Twilio VoiceResponse helper
+const { VoiceResponse } = twiml;
 
 dotenv.config();
 const app = express();
 
 // Parse JSON bodies (for /search-local, /config, etc.)
 app.use(express.json());
-// Parse x-www-form-urlencoded bodies (Twilio will POST form data)
+// Parse x-www-form-urlencoded bodies (Twilio sends form data)
 app.use(express.urlencoded({ extended: false }));
 
 // Expose cache metrics for client-config
@@ -46,8 +48,22 @@ app.get('/config', async (req, res) => {
   }
 });
 
-// Twilio incoming-call webhook — handle both /voice and /process-recording
-app.post('/voice', handleRecording);
+// Initial call handler: prompt & record
+app.post('/voice', (req, res) => {
+  const response = new VoiceResponse();
+  response.say('Welcome to HelpFlow AI. Please ask your question after the beep.');
+  response.record({
+    action: '/process-recording',
+    method: 'POST',
+    maxLength: 60,
+    playBeep: true
+  });
+  response.hangup();
+
+  res.type('text/xml').send(response.toString());
+});
+
+// Post-recording webhook: process the recording
 app.post('/process-recording', handleRecording);
 
 // Standalone RAG endpoint
@@ -91,3 +107,4 @@ app.post('/search-local', async (req, res) => {
 // Start the server
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`✅ Server listening on port ${port}`));
+
