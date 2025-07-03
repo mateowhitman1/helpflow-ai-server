@@ -29,6 +29,8 @@ const validate = ajv.compile(schema);
 // Default fallback values
 const defaultConfig = {
   clientId: '',
+   maxTokens: 60,
+  topK: 2,
 
   // core defaults if Airtable isn’t populated
   botName: 'HelpFlow AI',

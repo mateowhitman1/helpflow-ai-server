@@ -119,7 +119,7 @@ export async function handleRecording(req, res) {
   await saveSession(sid, session);
 
   const ttsReply = await generateSpeech(reply, cfg.voiceId, sid, cfg.modelId);
-  await logCallToAirtable({ callId: sid, client: clientId, callerNumber: From, dateTime: new Date(), callStatus: CallStatus, recordingUrl: audioUrl, transcript, intent: '', outcome: reply });
+  logCallToAirtable({$1}).catch(err => console.warn('Airtable log error:', err));
 
   vr.play(absoluteUrl(ttsReply));
   vr.gather({ input: 'speech', action: `/process-recording?client=${clientId}`, timeout: cfg.gatherTimeout, speechTimeout: 'auto', bargeIn: true });

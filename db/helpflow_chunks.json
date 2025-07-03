@@ -1,0 +1,10 @@
+[
+  {
+    "source": "faq.txt",
+    "text": "cat > knowledge_base/helpflow/faq.txt <<EOF\r\nQ: What is your return policy? A: We accept returns within 30 days of purchase, no questions asked. Q: How can I contact support? A: You can reach us at support@example.com or call 1-800-123-4567. EOF"
+  },
+  {
+    "source": "faq.txt",
+    "text": "cat > knowledge_base/helpflow/faq.txt <<EOF\r\nQ: What is your return policy? A: We accept returns within 30 days of purchase, no questions asked. Q: How can I contact support? A: You can reach us at support@example.com or call 1-800-123-4567. EOF"
+  }
+]

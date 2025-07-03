@@ -8,6 +8,13 @@ import pkg from 'twilio';
 import { getClientConfig, registerMetricsEndpoint } from './client-config.js';
 import { handleRecording } from './processRecording.js';
 import { makeVectorStore } from './vectorStore.js';
+const VS_CACHE = new Map();
+export function getVectorStore(clientId) {
+  if (!VS_CACHE.has(clientId)) {
+    VS_CACHE.set(clientId, makeVectorStore(clientId));
+  }
+  return VS_CACHE.get(clientId);
+}
 import { generateSpeech } from './utils/elevenlabs.js';
 
 // Twilio VoiceResponse helper
