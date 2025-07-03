@@ -1,7 +1,7 @@
 /* 
--------------------------------------------------------------
-Twilio recording → Whisper → RAG-enhanced GPT → ElevenLabs TTS
-+ Airtable log → Twilio playback (with Gather for next turn)
+   -------------------------------------------------------------
+   Twilio recording → Whisper → RAG-enhanced GPT → ElevenLabs TTS
+   + Airtable log → Twilio playback (with Gather for next turn)
 -------------------------------------------------------------*/
 
 // Ensure File global for OpenAI uploads
@@ -27,18 +27,6 @@ const DEFAULT_MAX_TOKENS = 80;
 
 // In-memory cache for embeddings
 const embedCache = new LRUCache({ max: 100, ttl: 5 * 60 * 1000 });  // 5 min TTL
-
-// Pre-warm "thinking" TTS
-let thinkingAudioUrl = null;
-(async () => {
-  try {
-    const cfg = await getClientConfig('helpflow');
-    const rel = await generateSpeech('One moment please…', cfg.voiceId, 'thinking', cfg.modelId);
-    thinkingAudioUrl = new URL(rel, process.env.PUBLIC_BASE_URL).href;
-  } catch (e) {
-    console.warn('Failed to pre-warm thinking TTS:', e);
-  }
-})();
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -75,12 +63,10 @@ export async function handleRecording(req, res) {
   const vs = makeVectorStore(clientId);
   const { RecordingUrl, From, CallStatus, SpeechResult } = req.body;
 
-  // Initialize VoiceResponse
+  // Initialize TwiML
   const vr = new VoiceResponse();
-  // Play thinking prompt if available
-  if (thinkingAudioUrl) vr.play(thinkingAudioUrl);
 
-  // 1) Handle follow-up (no new recording)
+  // 1) Handle follow-up without new recording
   if (!RecordingUrl) {
     if (!SpeechResult) {
       const msg = 'Sorry, I didn\'t catch that. Could you please repeat?';
@@ -90,15 +76,10 @@ export async function handleRecording(req, res) {
       return res.type('text/xml').send(vr.toString());
     }
 
-    // Build and query GPT for follow-up
+    // Build prompt for follow-up
     const prompt = buildRagPrompt(cfg.systemPrompt, '', SpeechResult);
     const model = session.history.length === 0 ? (cfg.model || DEFAULT_MODEL) : DEFAULT_MODEL;
-    const chat = await openai.chat.completions.create({
-      model,
-      temperature: cfg.temperature ?? 0.6,
-      max_tokens: cfg.maxTokens ?? DEFAULT_MAX_TOKENS,
-      messages: [{ role: 'user', content: prompt }]
-    });
+    const chat = await openai.chat.completions.create({ model, temperature: cfg.temperature ?? 0.6, max_tokens: cfg.maxTokens ?? DEFAULT_MAX_TOKENS, messages: [{ role: 'user', content: prompt }] });
     const followup = chat.choices[0].message.content.trim();
 
     session.history.push({ user: SpeechResult, assistant: followup });
@@ -106,45 +87,32 @@ export async function handleRecording(req, res) {
 
     const ttsFollow = await generateSpeech(followup, cfg.voiceId, `${sid}-follow`, cfg.modelId);
     vr.play(absoluteUrl(ttsFollow));
-    vr.gather({ input: 'speech', action: `/process-recording?client=${clientId}`, timeout: cfg.gatherTimeout, speechTimeout: 'auto' });
+    vr.gather({ input: 'speech', action: `/process-recording?client=${clientId}`, timeout: cfg.gatherTimeout, speechTimeout: 'auto', bargeIn: true });
     return res.type('text/xml').send(vr.toString());
   }
 
-  // 2) Process new recording
-  const tmpPath = path.join(os.tmpdir(), `${sid}.mp3`);
+  // 2) Download, transcribe, search, and reply
+  const tmp = path.join(os.tmpdir(), `${sid}.mp3`);
   const audioUrl = RecordingUrl.endsWith('.mp3') ? RecordingUrl : `${RecordingUrl}.mp3`;
   const opts = { responseType: 'stream' };
   if (audioUrl.includes('twilio.com')) opts.auth = { username: process.env.TWILIO_ACCOUNT_SID, password: process.env.TWILIO_AUTH_TOKEN };
-  await axios.get(audioUrl, opts).then(resp => new Promise((r, e) => {
-    const w = fs.createWriteStream(tmpPath);
-    resp.data.pipe(w);
-    w.on('finish', r);
-    w.on('error', e);
-  }));
+  await axios.get(audioUrl, opts).then(resp => new Promise((r, e) => { const w = fs.createWriteStream(tmp); resp.data.pipe(w); w.on('finish', r); w.on('error', e); }));
 
-  const tr = await openai.audio.transcriptions.create({ file: fs.createReadStream(tmpPath), model: 'whisper-1' });
+  const tr = await openai.audio.transcriptions.create({ file: fs.createReadStream(tmp), model: 'whisper-1' });
   const transcript = tr.text.trim();
 
-  // Embedding with cache
   let embedding = embedCache.get(transcript);
   if (!embedding) {
     const embRes = await openai.embeddings.create({ model: 'text-embedding-ada-002', input: transcript });
     embedding = embRes.data[0].embedding;
     embedCache.set(transcript, embedding);
   }
-
   const results = await vs.search(embedding, cfg.topK || 3);
   const contextText = results.map((r, i) => `Context ${i+1}: ${r.chunk.text}`).join('\n\n');
 
-  // GPT call
   const model = session.history.length === 0 ? (cfg.model || DEFAULT_MODEL) : DEFAULT_MODEL;
   const prompt = buildRagPrompt(cfg.systemPrompt, contextText, transcript);
-  const chatRes = await openai.chat.completions.create({
-    model,
-    temperature: cfg.temperature ?? 0.6,
-    max_tokens: cfg.maxTokens ?? DEFAULT_MAX_TOKENS,
-    messages: [{ role: 'user', content: prompt }]
-  });
+  const chatRes = await openai.chat.completions.create({ model, temperature: cfg.temperature ?? 0.6, max_tokens: cfg.maxTokens ?? DEFAULT_MAX_TOKENS, messages: [{ role: 'user', content: prompt }] });
   const reply = chatRes.choices[0].message.content.trim();
 
   session.history.push({ user: transcript, assistant: reply });
@@ -154,7 +122,6 @@ export async function handleRecording(req, res) {
   await logCallToAirtable({ callId: sid, client: clientId, callerNumber: From, dateTime: new Date(), callStatus: CallStatus, recordingUrl: audioUrl, transcript, intent: '', outcome: reply });
 
   vr.play(absoluteUrl(ttsReply));
-  vr.gather({ input: 'speech', action: `/process-recording?client=${clientId}`, timeout: cfg.gatherTimeout, speechTimeout: 'auto' });
-
+  vr.gather({ input: 'speech', action: `/process-recording?client=${clientId}`, timeout: cfg.gatherTimeout, speechTimeout: 'auto', bargeIn: true });
   return res.type('text/xml').send(vr.toString());
 }
