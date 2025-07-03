@@ -34,7 +34,7 @@ const defaultConfig = {
 
   // core defaults if Airtable isn’t populated
   botName: 'HelpFlow AI',
-  voiceId: process.env.ELEVENLABS_VOICE_ID || 'EXAVITQu4vr4xnSDxMaL',
+  voiceId: process.env.ELEVENLABS_VOICE_ID || 'agent_01jyj7d6acepza3vek18fnjhfz',
   systemPrompt:
     'You are a friendly, concise phone receptionist for HelpFlow AI. Answer clearly, briefly, and helpfully.',
   modelId: process.env.ELEVENLABS_MODEL_ID || 'eleven_turbo_v2', // default TTS model
