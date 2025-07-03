@@ -14,7 +14,7 @@ import fs from "fs";
 import path from "path";
 import { OpenAI } from "openai";
 import pkg from "twilio";
-import LRUCache from "lru-cache";
+import { LRUCache } from "lru-cache";
 import { getClientConfig } from "./client-config.js";
 import { makeVectorStore } from "./vectorStore.js";
 import { generateSpeech } from "./utils/elevenlabs.js";
