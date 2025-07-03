@@ -30,12 +30,14 @@ export async function generateSpeech(text, voiceId, callId) {
     headers: {
       "xi-api-key": process.env.ELEVENLABS_API_KEY,
       "Content-Type": "application/json",
-      Accept: "audio/mpeg",
+      Accept: "audio/wav"
     },
     data: {
       text,
       model_id: "eleven_turbo_v2",
-      voice_settings: { stability: 0.5, similarity_boost: 0.5 },
+      voice_settings: { stability: 0.2, similarity_boost: 0.8 },
+       format: "wav", 
+       sample_rate: 48000
     },
   });
 
