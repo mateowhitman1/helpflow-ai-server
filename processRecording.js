@@ -77,7 +77,8 @@ export async function handleRecording(req, res) {
 
   // Initialize VoiceResponse
   const vr = new VoiceResponse();
-  
+  // Play thinking prompt if available
+  if (thinkingAudioUrl) vr.play(thinkingAudioUrl);
 
   // 1) Handle follow-up (no new recording)
   if (!RecordingUrl) {
