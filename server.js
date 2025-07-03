@@ -40,7 +40,7 @@ registerMetricsEndpoint(app);
 // OpenAI client
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// Helper to build RAG prompt
+// RAG prompt builder
 function buildRagPrompt(systemPrompt, contextText, userText) {
   return `
 ${systemPrompt}
@@ -58,17 +58,17 @@ QUESTION:
 ${userText}`.trim();
 }
 
-// Cache for greetings
-const GREET_CACHE = new Map();
+// TTS cache
+const TTS_CACHE = { greeting: new Map(), retry: new Map(), fallback: new Map(), goodbye: new Map() };
 
-// Pre-generate and cache greeting TTS
-async function getGreeting(clientId) {
-  if (GREET_CACHE.has(clientId)) return GREET_CACHE.get(clientId);
+async function getTts(clientId, type, text, filenameSuffix) {
+  const cache = TTS_CACHE[type];
+  if (cache.has(clientId)) return cache.get(clientId);
   const cfg = await getClientConfig(clientId);
-  const greetingText = `Hello, thank you for calling ${cfg.botName}. How can I help you today?`;
-  const relPath = await generateSpeech(greetingText, cfg.voiceId, `greeting-${clientId}`, cfg.modelId);
+  const filename = `${type}-${clientId}${filenameSuffix ? '-' + filenameSuffix : ''}`;
+  const relPath = await generateSpeech(text, cfg.voiceId, filename, cfg.modelId);
   const fullUrl = new URL(relPath, process.env.PUBLIC_BASE_URL).href;
-  GREET_CACHE.set(clientId, fullUrl);
+  cache.set(clientId, fullUrl);
   return fullUrl;
 }
 
@@ -77,24 +77,27 @@ app.post('/voice', async (req, res) => {
   const { client: clientId = 'helpflow' } = req.query;
   const vr = new VoiceResponse();
 
-  // Play cached greeting
-  const greetUrl = await getGreeting(clientId);
+  // 1) Greeting
+  const cfg = await getClientConfig(clientId);
+  const greetText = `Hello, thank you for calling ${cfg.botName}. How can I help you today?`;
+  const greetUrl = await getTts(clientId, 'greeting', greetText);
   vr.play(greetUrl);
 
-  // Gather user speech
-  const cfg = await getClientConfig(clientId);
+  // 2) Gather user speech with optimized recording settings
   vr.gather({
     input: 'speech',
     action: `/process-recording?client=${clientId}`,
     method: 'POST',
     timeout: cfg.gatherTimeout,
-    speechTimeout: 'auto'
+    speechTimeout: 'auto',
+    recordingChannels: 'mono',
+    bitRate: '32k'
   });
 
-  // Fallback if no speech
+  // 3) Fallback
   const fallbackText = "Sorry, I didn't hear anything. Goodbye.";
-  const fallbackPath = await generateSpeech(fallbackText, cfg.voiceId, `fallback-${clientId}`, cfg.modelId);
-  vr.play(fallbackPath);
+  const fallbackUrl = await getTts(clientId, 'fallback', fallbackText);
+  vr.play(fallbackUrl);
   vr.hangup();
 
   res.type('text/xml').send(vr.toString());
@@ -109,23 +112,22 @@ app.post('/search-local', async (req, res) => {
     const { client, query } = req.body;
     if (!client || !query) return res.status(400).json({ error: 'Missing client or query' });
 
-    // Fetch client system prompt
     const cfg = await getClientConfig(client);
     const systemPrompt = cfg.systemPrompt;
 
     // Embed query
-    const embRes = await openai.embeddings.create({ model: 'text-embedding-ada-002', input: query });
-    const queryEmbed = embRes.data[0].embedding;
+    const emb = await openai.embeddings.create({ model: 'text-embedding-ada-002', input: query });
+    const queryEmbed = emb.data[0].embedding;
 
     // Vector search
     const vs = makeVectorStore(client);
-    const results = await vs.search(queryEmbed, cfg.topK || 5);
-    const contextText = results.map((r, i) => `Context ${i+1}: ${r.chunk.text}`).join('\n\n');
+    const results = await vs.search(queryEmbed, cfg.topK || 3);
+    const contextText = results.map((r,i) => `Context ${i+1}: ${r.chunk.text}`).join('\n\n');
 
     // GPT completion
     const prompt = buildRagPrompt(systemPrompt, contextText, query);
-    const chatRes = await openai.chat.completions.create({ model: 'gpt-3.5-turbo', messages: [{ role: 'user', content: prompt }] });
-    const reply = chatRes.choices[0].message.content;
+    const chat = await openai.chat.completions.create({ model: 'gpt-3.5-turbo', messages: [{ role:'user', content: prompt }] });
+    const reply = chat.choices[0].message.content;
 
     res.json({ client, query, context: results, reply });
   } catch (err) {
