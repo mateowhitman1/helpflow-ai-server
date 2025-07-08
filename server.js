@@ -63,7 +63,14 @@ app.get('/tts-stream/:client/:type', async (req, res) => {
       ? cfg.scripts['greeting']
       : cfg.scripts['fallback']) || fallbackDefault;
 
-    const voiceCfg = cfg.voices[cfg.settings.defaultVoiceName] || { voiceId: cfg.voiceId, model: cfg.modelId };
+    const fallbackVoiceId = process.env.ELEVENLABS_VOICE_ID || 'EXAVITQu4vr4xnSDxMaL';
+    const fallbackModel = process.env.ELEVENLABS_MODEL_ID || 'eleven_turbo_v2';
+
+    const voiceCfg = cfg.voices?.[cfg.settings?.defaultVoiceName] || {
+      voiceId: fallbackVoiceId,
+      model: fallbackModel
+    };
+
     const { stability = 0.5, similarity = 0.75 } = cfg.settings;
 
     console.log('📤 ElevenLabs TTS request:', {
@@ -99,7 +106,7 @@ app.get('/tts-stream/:client/:type', async (req, res) => {
   }
 });
 
-// 1️⃣ Incoming call webhook with barge-in support
+// 1⃣ Incoming call webhook with barge-in support
 app.post('/voice', async (req, res) => {
   const { client: clientId = 'helpflow' } = req.query;
   const cfg = await getClientConfig(clientId);
@@ -125,7 +132,7 @@ app.post('/voice', async (req, res) => {
   res.type('text/xml').send(vr.toString());
 });
 
-// 2️⃣ Process recording & reply
+// 2⃣ Process recording & reply
 app.post('/process-recording', async (req, res) => {
   const { client: clientId = 'helpflow' } = req.query;
   const cfg = await getClientConfig(clientId);
@@ -133,7 +140,7 @@ app.post('/process-recording', async (req, res) => {
   await handleRecording(req, res, { cfg, openai, vs });
 });
 
-// 3️⃣ Standalone RAG endpoint
+// 3⃣ Standalone RAG endpoint
 app.post('/search-local', async (req, res) => {
   try {
     const { client, query } = req.body;
@@ -183,9 +190,10 @@ app.listen(port, async () => {
       const cfg = await getClientConfig(clientId);
       await axios.get(`${process.env.PUBLIC_BASE_URL}/tts-stream/${clientId}/greeting`);
       await axios.get(`${process.env.PUBLIC_BASE_URL}/tts-stream/${clientId}/fallback`);
-      console.log(`🔆 Warmed TTS for ${clientId}`);
+      console.log(`🌆 Warmed TTS for ${clientId}`);
     } catch (e) {
       console.warn(`Failed to warm TTS for ${clientId}`, e.message);
     }
   }
 });
+
