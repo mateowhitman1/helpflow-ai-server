@@ -1,9 +1,10 @@
-// configLoader.js
-const Airtable = require('airtable');
-const { LRUCache } = require('lru-cache');
-require('dotenv').config();
-const Ajv = require('ajv');
+// client-config.js
+import Airtable from 'airtable';
+import { LRUCache } from 'lru-cache';
+import dotenv from 'dotenv';
+import Ajv from 'ajv';
 
+dotenv.config();
 const {
   AIRTABLE_API_KEY,
   AIRTABLE_BASE_ID,
@@ -69,15 +70,21 @@ const cache = new LRUCache({
 let cacheHits = 0;
 let cacheMisses = 0;
 
-function getCacheMetrics() {
+/**
+ * Returns cache statistics.
+ */
+export function getCacheMetrics() {
   return { hits: cacheHits, misses: cacheMisses, size: cache.size };
 }
 
+/**
+ * Fetch all records from an Airtable table with optional filter formula.
+ */
 async function fetchAll(tableName, filterFormula = '') {
   const out = [];
   if (!base) return out;
   await base(tableName)
-    .select({ filterByFormula, pageSize: 100 })
+    .select({ filterByFormula: filterFormula, pageSize: 100 })
     .eachPage((page, next) => {
       out.push(...page.map(r => ({ id: r.id, fields: r.fields })));
       next();
@@ -85,7 +92,10 @@ async function fetchAll(tableName, filterFormula = '') {
   return out;
 }
 
-async function getClientConfig(clientId) {
+/**
+ * Load client configuration from multiple Airtable tables, with caching.
+ */
+export async function getClientConfig(clientId) {
   const key = clientId.toLowerCase();
   if (cache.has(key)) {
     cacheHits++;
@@ -93,6 +103,7 @@ async function getClientConfig(clientId) {
   }
   cacheMisses++;
 
+  // Start with defaults
   let config = { clientId, ...defaultConfig };
 
   if (base) {
@@ -145,5 +156,3 @@ async function getClientConfig(clientId) {
   cache.set(key, config);
   return config;
 }
-
-module.exports = { getClientConfig, getCacheMetrics };
