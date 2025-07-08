@@ -1,4 +1,6 @@
-// server.js
+//server.js
+// Main server file for HelpFlow AI 
+
 import express from 'express';
 import dotenv from 'dotenv';
 import path from 'path';
@@ -54,9 +56,7 @@ async function getTts(clientId, type, text) {
   const cache = TTS_CACHE[type];
   if (cache.has(clientId)) return cache.get(clientId);
   const cfg = await getClientConfig(clientId);
-  // pick voice settings
   const voiceCfg = cfg.voices[cfg.settings.defaultVoiceName] || { voiceId: cfg.voiceId, model: cfg.modelId };
-  // pull quality settings
   const { stability, similarity, voiceSpeed } = cfg.settings;
   const filename = `${type}-${clientId}`;
   const relPath = await generateSpeech(text, voiceCfg.voiceId, filename, { modelId: voiceCfg.model, stability, similarity, voiceSpeed });
@@ -65,18 +65,19 @@ async function getTts(clientId, type, text) {
   return fullUrl;
 }
 
-// 1️⃣ Incoming call webhook
+// 1️⃣ Incoming call webhook with barge-in support
 app.post('/voice', async (req, res) => {
   const { client: clientId = 'helpflow' } = req.query;
   const cfg = await getClientConfig(clientId);
   const vr = new VoiceResponse();
 
-  // Greeting: use script if available
+  // Prepare greeting and fallback URLs
   const greetText = cfg.scripts['greeting'] || `Hello, thank you for calling ${cfg.botName}. How can I help you today?`;
   const greetUrl = await getTts(clientId, 'greeting', greetText);
-  vr.play(greetUrl);
+  const fallbackText = cfg.scripts['fallback'] || "Sorry, I didn't hear anything. Goodbye.";
+  const fallbackUrl = await getTts(clientId, 'fallback', fallbackText);
 
-  // Gather user speech
+  // Gather with barge-in: caller can interrupt the greeting
   vr.gather({
     input: 'speech',
     action: `/process-recording?client=${clientId}`,
@@ -84,12 +85,12 @@ app.post('/voice', async (req, res) => {
     timeout: cfg.gatherTimeout,
     speechTimeout: 'auto',
     recordingChannels: 'mono',
-    bitRate: '32k'
-  });
+    bitRate: '32k',
+    bargeIn: true
+  })
+    .play(greetUrl);
 
   // Fallback if no speech detected
-  const fallbackText = cfg.scripts['fallback'] || "Sorry, I didn't hear anything. Goodbye.";
-  const fallbackUrl = await getTts(clientId, 'fallback', fallbackText);
   vr.play(fallbackUrl);
   vr.hangup();
 

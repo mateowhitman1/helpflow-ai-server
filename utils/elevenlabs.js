@@ -13,14 +13,19 @@ console.log(
  * @param {string}  text       – text to speak
  * @param {string}  voiceId    – ElevenLabs voice ID
  * @param {string}  callId     – Twilio Call SID (used as filename)
- * @param {object}  opts       – optional voice parameters: { stability, similarity, voiceSpeed }
+ * @param {object}  opts       – optional voice parameters: { modelId, stability, similarity, voiceSpeed }
  * @returns {string}           – `/audio/<callId>.mp3`
  */
 export async function generateSpeech(text, voiceId, callId, opts = {}) {
   if (!process.env.ELEVENLABS_API_KEY)
     throw new Error("Missing ELEVENLABS_API_KEY env var");
 
-  const { stability = 0.5, similarity = 0.75, voiceSpeed = 1.0 } = opts;
+  const {
+    modelId = "eleven_turbo_v2", 
+    stability = 0.5, 
+    similarity = 0.75, 
+    voiceSpeed = 1.0
+  } = opts;
 
   /* ---- 1. call “/stream” endpoint & request raw audio -------------------- */
   const url = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream`;
@@ -31,18 +36,17 @@ export async function generateSpeech(text, voiceId, callId, opts = {}) {
     headers: {
       "xi-api-key": process.env.ELEVENLABS_API_KEY,
       "Content-Type": "application/json",
-      Accept: "audio/wav"
+      Accept: "audio/mpeg"
     },
     data: {
       text,
-      model_id: opts.modelId || "eleven_turbo_v2",
+      model_id: modelId,
       voice_settings: {
         stability,
-        similarity_boost: similarity,
-        style_settings: { speed: voiceSpeed }
+        similarity_boost: similarity
       },
-      format: "wav",
-      sample_rate: 48000
+      format: "mp3",
+      sample_rate: 16000
     },
   });
 
