@@ -8,11 +8,12 @@ dotenv.config();
 const {
   AIRTABLE_API_KEY,
   AIRTABLE_BASE_ID,
-  TABLE_SCRIPTS,
-  TABLE_VOICES,
-  TABLE_UPSELLS,
-  TABLE_SETTINGS,
-  TABLE_KB,
+  // Default table names if environment variables are not set
+  TABLE_SCRIPTS = 'Scripts',
+  TABLE_VOICES = 'Voices',
+  TABLE_UPSELLS = 'Upsells',
+  TABLE_SETTINGS = 'Settings',
+  TABLE_KB = 'Knowledge Base',
   CONFIG_CACHE_TTL_MS,
   ELEVENLABS_VOICE_ID,
   ELEVENLABS_MODEL_ID
