@@ -109,7 +109,8 @@ app.get('/tts-stream/:client/:type', async (req, res) => {
 
     if (llRes.status !== 200) {
       console.error(`❌ ElevenLabs responded with status ${llRes.status}`);
-      res.status(llRes.status).send(`ElevenLabs error: ${llRes.status}`);
+      res.set('Content-Type', 'text/plain');
+      res.status(502).send(`⚠️ ElevenLabs failed to stream TTS (voiceId: ${voiceId}). You may want to switch voices or check model compatibility.`);
       return;
     }
 
