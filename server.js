@@ -1,15 +1,16 @@
-//server.js
-// Main server file for HelpFlow AI 
+// Main server file for HelpFlow AI
+// Handles incoming calls, TTS streaming, and RAG search
+// Uses Twilio for voice, ElevenLabs for TTS, and OpenAI for RAG  
 
 import express from 'express';
 import dotenv from 'dotenv';
 import path from 'path';
 import fs from 'fs';
+import axios from 'axios';
 import { OpenAI } from 'openai';
 import pkg from 'twilio';
 import { getClientConfig, registerMetricsEndpoint } from './client-config.js';
 import { makeVectorStore } from './vectorStore.js';
-import { generateSpeech } from './utils/elevenlabs.js';
 import { handleRecording } from './processRecording.js';
 
 dotenv.config();
@@ -43,7 +44,6 @@ registerMetricsEndpoint(app);
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 // In-memory caches
-const TTS_CACHE = { greeting: new Map(), fallback: new Map(), goodbye: new Map() };
 const VS_CACHE = new Map();
 
 export function getVectorStore(clientId) {
@@ -51,19 +51,43 @@ export function getVectorStore(clientId) {
   return VS_CACHE.get(clientId);
 }
 
-// Helper: get or generate TTS and URL with quality settings
-async function getTts(clientId, type, text) {
-  const cache = TTS_CACHE[type];
-  if (cache.has(clientId)) return cache.get(clientId);
-  const cfg = await getClientConfig(clientId);
-  const voiceCfg = cfg.voices[cfg.settings.defaultVoiceName] || { voiceId: cfg.voiceId, model: cfg.modelId };
-  const { stability, similarity, voiceSpeed } = cfg.settings;
-  const filename = `${type}-${clientId}`;
-  const relPath = await generateSpeech(text, voiceCfg.voiceId, filename, { modelId: voiceCfg.model, stability, similarity, voiceSpeed });
-  const fullUrl = new URL(relPath, process.env.PUBLIC_BASE_URL).href;
-  cache.set(clientId, fullUrl);
-  return fullUrl;
-}
+// 📡 Low-latency TTS streaming proxy
+app.get('/tts-stream/:client/:type', async (req, res) => {
+  const { client: clientId, type } = req.params;
+  try {
+    const cfg = await getClientConfig(clientId);
+    const text = type === 'greeting'
+      ? cfg.scripts['greeting']
+      : cfg.scripts['fallback'];
+    const voiceCfg = cfg.voices[cfg.settings.defaultVoiceName] || { voiceId: cfg.voiceId, model: cfg.modelId };
+    const { stability, similarity } = cfg.settings;
+
+    const llRes = await axios.post(
+      `https://api.elevenlabs.io/v1/text-to-speech/${voiceCfg.voiceId}/stream`,
+      {
+        text,
+        model_id: voiceCfg.model,
+        voice_settings: { stability, similarity_boost: similarity },
+        format: 'mp3',
+        sample_rate: 16000
+      },
+      {
+        responseType: 'stream',
+        headers: {
+          'xi-api-key': process.env.ELEVENLABS_API_KEY,
+          'Content-Type': 'application/json',
+          Accept: 'audio/mpeg'
+        }
+      }
+    );
+
+    res.set('Content-Type', 'audio/mpeg');
+    llRes.data.pipe(res);
+  } catch (err) {
+    console.error('TTS stream error:', err.message);
+    res.status(500).send();
+  }
+});
 
 // 1️⃣ Incoming call webhook with barge-in support
 app.post('/voice', async (req, res) => {
@@ -71,13 +95,7 @@ app.post('/voice', async (req, res) => {
   const cfg = await getClientConfig(clientId);
   const vr = new VoiceResponse();
 
-  // Prepare greeting and fallback URLs
-  const greetText = cfg.scripts['greeting'] || `Hello, thank you for calling ${cfg.botName}. How can I help you today?`;
-  const greetUrl = await getTts(clientId, 'greeting', greetText);
-  const fallbackText = cfg.scripts['fallback'] || "Sorry, I didn't hear anything. Goodbye.";
-  const fallbackUrl = await getTts(clientId, 'fallback', fallbackText);
-
-  // Gather with barge-in: caller can interrupt the greeting
+  // Use streaming endpoint for greeting
   vr.gather({
     input: 'speech',
     action: `/process-recording?client=${clientId}`,
@@ -88,10 +106,10 @@ app.post('/voice', async (req, res) => {
     bitRate: '32k',
     bargeIn: true
   })
-    .play(greetUrl);
+    .play(`${process.env.PUBLIC_BASE_URL}/tts-stream/${clientId}/greeting`);
 
   // Fallback if no speech detected
-  vr.play(fallbackUrl);
+  vr.play(`${process.env.PUBLIC_BASE_URL}/tts-stream/${clientId}/fallback`);
   vr.hangup();
 
   res.type('text/xml').send(vr.toString());
@@ -102,7 +120,7 @@ app.post('/process-recording', async (req, res) => {
   const { client: clientId = 'helpflow' } = req.query;
   const cfg = await getClientConfig(clientId);
   const vs = getVectorStore(clientId);
-  await handleRecording(req, res, { cfg, openai, vs, generateSpeech });
+  await handleRecording(req, res, { cfg, openai, vs });
 });
 
 // 3️⃣ Standalone RAG endpoint
@@ -143,6 +161,21 @@ ${query}`.trim();
   }
 });
 
-// Start server
+// Start server with pre-generation
 const port = process.env.PORT || 3000;
-app.listen(port, () => console.log(`✅ Server listening on port ${port}`));
+app.listen(port, async () => {
+  console.log(`✅ Server listening on port ${port}`);
+
+  // Pre-generate TTS to cache
+  const known = (process.env.KNOWN_CLIENTS || 'helpflow').split(',');
+  for (const clientId of known) {
+    try {
+      const cfg = await getClientConfig(clientId);
+      await axios.get(`${process.env.PUBLIC_BASE_URL}/tts-stream/${clientId}/greeting`);
+      await axios.get(`${process.env.PUBLIC_BASE_URL}/tts-stream/${clientId}/fallback`);
+      console.log(`🔆 Warmed TTS for ${clientId}`);
+    } catch (e) {
+      console.warn(`Failed to warm TTS for ${clientId}`, e.message);
+    }
+  }
+});
