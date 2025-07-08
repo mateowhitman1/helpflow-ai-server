@@ -63,11 +63,16 @@ app.get('/tts-stream/:client/:type', async (req, res) => {
       ? cfg.scripts['greeting']
       : cfg.scripts['fallback']) || fallbackDefault;
 
-    // ⚠️ Hardcoded fallback voice config for debugging
-    const voiceId = 'EXAVITQu4vr4xnSDxMaL';
-    const modelId = 'eleven_turbo_v2';
-    const stability = 0.5;
-    const similarity = 0.75;
+    // ✅ Use client's default voice settings from Airtable
+    const voiceCfg = cfg.voices[cfg.settings.defaultVoiceName] || {
+      voiceId: cfg.voiceId,
+      model: cfg.modelId || 'eleven_turbo_v2'
+    };
+
+    const voiceId = voiceCfg.voiceId;
+    const modelId = voiceCfg.model || 'eleven_turbo_v2';
+    const stability = parseFloat(cfg.settings.stability || 0.5);
+    const similarity = parseFloat(cfg.settings.similarity || 0.75);
 
     // ✨ Full debug output of the request to ElevenLabs
     console.log('📤 ElevenLabs TTS full request →');
@@ -80,9 +85,7 @@ app.get('/tts-stream/:client/:type', async (req, res) => {
     console.log('Payload:', {
       text,
       model_id: modelId,
-      voice_settings: { stability, similarity_boost: similarity },
-      format: 'mp3',
-      sample_rate: 16000
+      voice_settings: { stability: stability, similarity_boost: similarity }
     });
 
     const llRes = await axios.post(
@@ -90,9 +93,7 @@ app.get('/tts-stream/:client/:type', async (req, res) => {
       {
         text,
         model_id: modelId,
-        voice_settings: { stability, similarity_boost: similarity },
-        format: 'mp3',
-        sample_rate: 16000
+        voice_settings: { stability: stability, similarity_boost: similarity }
       },
       {
         responseType: 'stream',
@@ -202,5 +203,3 @@ app.listen(port, async () => {
     }
   }
 });
-
-///this means nothing to the client, but is useful for debugging
