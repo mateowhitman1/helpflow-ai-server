@@ -145,6 +145,11 @@ export async function getClientConfig(clientId) {
         settings.map(r => [r.fields.Key, r.fields.value])
       );
 
+      // parse new voice quality settings
+      const stability = parseFloat(settingsMap.stability) || 0.5;
+      const similarity = parseFloat(settingsMap.similarity) || 0.75;
+      const voiceSpeed = parseFloat(settingsMap.voiceSpeed) || 1.0;
+
       const kb = kbEntries.map(r => ({ key: r.fields['Topic Key'], content: r.fields.content }));
 
       config = {
@@ -152,7 +157,7 @@ export async function getClientConfig(clientId) {
         scripts: scriptMap,
         voices: voiceMap,
         upsells: upsellList,
-        settings: settingsMap,
+        settings: { ...settingsMap, stability, similarity, voiceSpeed },
         knowledgeBase: kb
       };
     } catch (err) {

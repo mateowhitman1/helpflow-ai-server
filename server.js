@@ -49,15 +49,17 @@ export function getVectorStore(clientId) {
   return VS_CACHE.get(clientId);
 }
 
-// Helper: get or generate TTS and URL
+// Helper: get or generate TTS and URL with quality settings
 async function getTts(clientId, type, text) {
   const cache = TTS_CACHE[type];
   if (cache.has(clientId)) return cache.get(clientId);
   const cfg = await getClientConfig(clientId);
-  // pick voice settings from config
+  // pick voice settings
   const voiceCfg = cfg.voices[cfg.settings.defaultVoiceName] || { voiceId: cfg.voiceId, model: cfg.modelId };
+  // pull quality settings
+  const { stability, similarity, voiceSpeed } = cfg.settings;
   const filename = `${type}-${clientId}`;
-  const relPath = await generateSpeech(text, voiceCfg.voiceId, filename, voiceCfg.model);
+  const relPath = await generateSpeech(text, voiceCfg.voiceId, filename, { modelId: voiceCfg.model, stability, similarity, voiceSpeed });
   const fullUrl = new URL(relPath, process.env.PUBLIC_BASE_URL).href;
   cache.set(clientId, fullUrl);
   return fullUrl;
@@ -86,7 +88,7 @@ app.post('/voice', async (req, res) => {
   });
 
   // Fallback if no speech detected
-  const fallbackText = cfg.scripts['fallback'] || "Sorry, I didn\'t hear anything. Goodbye.";
+  const fallbackText = cfg.scripts['fallback'] || "Sorry, I didn't hear anything. Goodbye.";
   const fallbackUrl = await getTts(clientId, 'fallback', fallbackText);
   vr.play(fallbackUrl);
   vr.hangup();
@@ -96,14 +98,13 @@ app.post('/voice', async (req, res) => {
 
 // 2️⃣ Process recording & reply
 app.post('/process-recording', async (req, res) => {
-  // reuse existing handler but inject config and dependencies
   const { client: clientId = 'helpflow' } = req.query;
   const cfg = await getClientConfig(clientId);
   const vs = getVectorStore(clientId);
   await handleRecording(req, res, { cfg, openai, vs, generateSpeech });
 });
 
-// 3️⃣ Standalone RAG endpoint (unchanged)
+// 3️⃣ Standalone RAG endpoint
 app.post('/search-local', async (req, res) => {
   try {
     const { client, query } = req.body;

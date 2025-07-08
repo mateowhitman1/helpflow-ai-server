@@ -1,5 +1,3 @@
-
-//elevenlabs.js
 import axios from "axios";
 import fs from "fs";
 import path from "path";
@@ -12,21 +10,24 @@ console.log(
 
 /**
  * Generate speech with ElevenLabs, store in public/audio/, return a URL Twilio can play.
- * @param {string}  text    – text to speak
- * @param {string}  voiceId – ElevenLabs voice ID
- * @param {string}  callId  – Twilio Call SID (used as filename)
- * @returns {string}        – `/audio/<callId>.mp3`
+ * @param {string}  text       – text to speak
+ * @param {string}  voiceId    – ElevenLabs voice ID
+ * @param {string}  callId     – Twilio Call SID (used as filename)
+ * @param {object}  opts       – optional voice parameters: { stability, similarity, voiceSpeed }
+ * @returns {string}           – `/audio/<callId>.mp3`
  */
-export async function generateSpeech(text, voiceId, callId) {
+export async function generateSpeech(text, voiceId, callId, opts = {}) {
   if (!process.env.ELEVENLABS_API_KEY)
     throw new Error("Missing ELEVENLABS_API_KEY env var");
+
+  const { stability = 0.5, similarity = 0.75, voiceSpeed = 1.0 } = opts;
 
   /* ---- 1. call “/stream” endpoint & request raw audio -------------------- */
   const url = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream`;
   const response = await axios({
     method: "POST",
     url,
-    responseType: "stream",  // << audio stream!
+    responseType: "stream",
     headers: {
       "xi-api-key": process.env.ELEVENLABS_API_KEY,
       "Content-Type": "application/json",
@@ -34,10 +35,14 @@ export async function generateSpeech(text, voiceId, callId) {
     },
     data: {
       text,
-      model_id: "eleven_turbo_v2",
-      voice_settings: { stability: 0.2, similarity_boost: 0.8 },
-       format: "wav", 
-       sample_rate: 48000
+      model_id: opts.modelId || "eleven_turbo_v2",
+      voice_settings: {
+        stability,
+        similarity_boost: similarity,
+        style_settings: { speed: voiceSpeed }
+      },
+      format: "wav",
+      sample_rate: 48000
     },
   });
 
@@ -54,9 +59,8 @@ export async function generateSpeech(text, voiceId, callId) {
     writer.on("error", reject);
   });
 
-  // Debug: confirm file write
   console.log(`Wrote TTS file to ${outFile}`);
 
-  /* ---- 3. return URL that server.js exposes via express.static ----------- */
+  /* ---- 3. return URL ----------------------------------------------- */
   return `/audio/${callId}.mp3`;
 }
