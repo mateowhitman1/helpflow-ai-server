@@ -73,11 +73,21 @@ app.get('/tts-stream/:client/:type', async (req, res) => {
 
     const { stability = 0.5, similarity = 0.75 } = cfg.settings;
 
-    console.log('📤 ElevenLabs TTS request:', {
-      text,
-      model_id: voiceCfg.model,
-      voice_settings: { stability, similarity_boost: similarity }
-    });
+    console.log('📤 ElevenLabs TTS full request →');
+console.log('URL:', `https://api.elevenlabs.io/v1/text-to-speech/${voiceCfg.voiceId}/stream`);
+console.log('Headers:', {
+  'xi-api-key': process.env.ELEVENLABS_API_KEY,
+  'Content-Type': 'application/json',
+  Accept: 'audio/mpeg'
+});
+console.log('Payload:', {
+  text,
+  model_id: voiceCfg.model,
+  voice_settings: { stability, similarity_boost: similarity },
+  format: 'mp3',
+  sample_rate: 16000
+});
+
 
     const llRes = await axios.post(
       `https://api.elevenlabs.io/v1/text-to-speech/${voiceCfg.voiceId}/stream`,
