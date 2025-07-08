@@ -78,7 +78,7 @@ app.get('/tts-stream/:client/:type', async (req, res) => {
     console.log('📤 ElevenLabs TTS full request →');
     console.log('URL:', `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream`);
     console.log('Headers:', {
-      'xi-api-key': process.env.ELEVENLABS_API_KEY,
+      'xi-api-key': '***',
       'Content-Type': 'application/json',
       Accept: 'audio/mpeg'
     });
@@ -88,22 +88,30 @@ app.get('/tts-stream/:client/:type', async (req, res) => {
       voice_settings: { stability: stability, similarity_boost: similarity }
     });
 
-    const llRes = await axios.post(
-      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream`,
-      {
+    const llRes = await axios({
+      method: 'post',
+      url: `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream`,
+      data: {
         text,
         model_id: modelId,
         voice_settings: { stability: stability, similarity_boost: similarity }
       },
-      {
-        responseType: 'stream',
-        headers: {
-          'xi-api-key': process.env.ELEVENLABS_API_KEY,
-          'Content-Type': 'application/json',
-          Accept: 'audio/mpeg'
-        }
+      headers: {
+        'xi-api-key': process.env.ELEVENLABS_API_KEY,
+        'Content-Type': 'application/json',
+        'Accept': 'audio/mpeg'
+      },
+      responseType: 'stream',
+      validateStatus: function (status) {
+        return status < 500; // Resolve only if status is less than 500
       }
-    );
+    });
+
+    if (llRes.status !== 200) {
+      console.error(`❌ ElevenLabs responded with status ${llRes.status}`);
+      res.status(llRes.status).send(`ElevenLabs error: ${llRes.status}`);
+      return;
+    }
 
     res.set('Content-Type', 'audio/mpeg');
     llRes.data.pipe(res);
@@ -203,3 +211,4 @@ app.listen(port, async () => {
     }
   }
 });
+
