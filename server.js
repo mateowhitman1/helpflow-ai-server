@@ -63,19 +63,15 @@ app.get('/tts-stream/:client/:type', async (req, res) => {
       ? cfg.scripts['greeting']
       : cfg.scripts['fallback']) || fallbackDefault;
 
-    const fallbackVoiceId = process.env.ELEVENLABS_VOICE_ID || 'EXAVITQu4vr4xnSDxMaL';
-    const fallbackModel = process.env.ELEVENLABS_MODEL_ID || 'eleven_turbo_v2';
-
-    const voiceCfg = cfg.voices?.[cfg.settings?.defaultVoiceName] || {
-      voiceId: fallbackVoiceId,
-      model: fallbackModel
-    };
-
-    const { stability = 0.5, similarity = 0.75 } = cfg.settings;
+    // ⚠️ Hardcoded fallback voice config for debugging
+    const voiceId = 'EXAVITQu4vr4xnSDxMaL';
+    const modelId = 'eleven_turbo_v2';
+    const stability = 0.5;
+    const similarity = 0.75;
 
     // ✨ Full debug output of the request to ElevenLabs
-    console.log('\ud83d\udce4 ElevenLabs TTS full request \u2192');
-    console.log('URL:', `https://api.elevenlabs.io/v1/text-to-speech/${voiceCfg.voiceId}/stream`);
+    console.log('📤 ElevenLabs TTS full request →');
+    console.log('URL:', `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream`);
     console.log('Headers:', {
       'xi-api-key': process.env.ELEVENLABS_API_KEY,
       'Content-Type': 'application/json',
@@ -83,17 +79,17 @@ app.get('/tts-stream/:client/:type', async (req, res) => {
     });
     console.log('Payload:', {
       text,
-      model_id: voiceCfg.model,
+      model_id: modelId,
       voice_settings: { stability, similarity_boost: similarity },
       format: 'mp3',
       sample_rate: 16000
     });
 
     const llRes = await axios.post(
-      `https://api.elevenlabs.io/v1/text-to-speech/${voiceCfg.voiceId}/stream`,
+      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream`,
       {
         text,
-        model_id: voiceCfg.model,
+        model_id: modelId,
         voice_settings: { stability, similarity_boost: similarity },
         format: 'mp3',
         sample_rate: 16000
