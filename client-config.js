@@ -1,26 +1,34 @@
-import Airtable from 'airtable';
-import { LRUCache } from 'lru-cache';
-import dotenv from 'dotenv';
-import Ajv from 'ajv';
+// configLoader.js
+const Airtable = require('airtable');
+const { LRUCache } = require('lru-cache');
+require('dotenv').config();
+const Ajv = require('ajv');
 
-dotenv.config();
-const { AIRTABLE_API_KEY, AIRTABLE_BASE_ID, AIRTABLE_TABLE_NAME, CONFIG_CACHE_TTL_MS } = process.env;
+const {
+  AIRTABLE_API_KEY,
+  AIRTABLE_BASE_ID,
+  TABLE_SCRIPTS,
+  TABLE_VOICES,
+  TABLE_UPSELLS,
+  TABLE_SETTINGS,
+  TABLE_KB,
+  CONFIG_CACHE_TTL_MS,
+  ELEVENLABS_VOICE_ID,
+  ELEVENLABS_MODEL_ID
+} = process.env;
 
-// JSON schema for client config fields, allowing numeric strings
+// JSON schema for client config fields (if using validation for main table)
 const schema = {
   type: 'object',
   properties: {
     ClientID: { type: 'string' },
     BotName: { type: 'string' },
     VoiceId: { type: 'string' },
-    SystemPrompt: { type: 'string' },
-    GatherTimeout: { anyOf: [{ type: 'number' }, { type: 'string' }] },
-    MaxRetries: { anyOf: [{ type: 'number' }, { type: 'string' }] },
-    DataSources: { type: 'string' },
-    ModelId: { type: 'string' },    // new field for ElevenLabs TTS model
+    SystemPrompt: { type: 'string' }
+    // add other core fields as needed
   },
   required: ['ClientID', 'BotName', 'VoiceId', 'SystemPrompt'],
-  additionalProperties: true,
+  additionalProperties: true
 };
 
 const ajv = new Ajv({ coerceTypes: true });
@@ -29,23 +37,24 @@ const validate = ajv.compile(schema);
 // Default fallback values
 const defaultConfig = {
   clientId: '',
-   maxTokens: 60,
-  topK: 2,
-
-  // core defaults if Airtable isn’t populated
   botName: 'HelpFlow AI',
-  voiceId: process.env.ELEVENLABS_VOICE_ID || 'EXAVITQu4vr4xnSDxMaL',
+  voiceId: ELEVENLABS_VOICE_ID || 'EXAVITQu4vr4xnSDxMaL',
   systemPrompt:
     'You are a friendly, concise phone receptionist for HelpFlow AI. Answer clearly, briefly, and helpfully.',
-  modelId: process.env.ELEVENLABS_MODEL_ID || 'eleven_turbo_v2', // default TTS model
+  modelId: ELEVENLABS_MODEL_ID || 'eleven_turbo_v2',
   gatherTimeout: 6,
   maxRetries: 2,
   dataSources: [],
+  scripts: {},
+  voices: {},
+  upsells: [],
+  settings: {},
+  knowledgeBase: []
 };
 
 // Initialize Airtable
 let base;
-if (AIRTABLE_API_KEY && AIRTABLE_BASE_ID && AIRTABLE_TABLE_NAME) {
+if (AIRTABLE_API_KEY && AIRTABLE_BASE_ID) {
   Airtable.configure({ apiKey: AIRTABLE_API_KEY });
   base = Airtable.base(AIRTABLE_BASE_ID);
 } else {
@@ -53,20 +62,30 @@ if (AIRTABLE_API_KEY && AIRTABLE_BASE_ID && AIRTABLE_TABLE_NAME) {
 }
 
 // Cache for configs
-const cache = new LRUCache({ max: 100, ttl: CONFIG_CACHE_TTL_MS ? Number(CONFIG_CACHE_TTL_MS) : 1000 * 60 * 5 });
-let cacheHits = 0, cacheMisses = 0;
+const cache = new LRUCache({
+  max: 100,
+  ttl: CONFIG_CACHE_TTL_MS ? Number(CONFIG_CACHE_TTL_MS) : 1000 * 60 * 5
+});
+let cacheHits = 0;
+let cacheMisses = 0;
 
-export function getCacheMetrics() {
+function getCacheMetrics() {
   return { hits: cacheHits, misses: cacheMisses, size: cache.size };
 }
-export function registerMetricsEndpoint(app, path = '/config-metrics') {
-  app.get(path, (req, res) => res.json(getCacheMetrics()));
+
+async function fetchAll(tableName, filterFormula = '') {
+  const out = [];
+  if (!base) return out;
+  await base(tableName)
+    .select({ filterByFormula, pageSize: 100 })
+    .eachPage((page, next) => {
+      out.push(...page.map(r => ({ id: r.id, fields: r.fields })));
+      next();
+    });
+  return out;
 }
 
-/**
- * Fetch client config by ID, with Airtable lookup and fallback.
- */
-export async function getClientConfig(clientId) {
+async function getClientConfig(clientId) {
   const key = clientId.toLowerCase();
   if (cache.has(key)) {
     cacheHits++;
@@ -74,42 +93,50 @@ export async function getClientConfig(clientId) {
   }
   cacheMisses++;
 
-  // start with defaults
   let config = { clientId, ...defaultConfig };
 
   if (base) {
     try {
-      // pull up to 100 records
-      const records = await base(AIRTABLE_TABLE_NAME).select({ maxRecords: 100 }).firstPage();
-      // detect primary field
-      const primaryField = Object.keys(records[0].fields)[0];
-      console.log(`→ Detected primary field: ${primaryField}`);
-      const record = records.find(r =>
-        String(r.fields[primaryField] || '').toLowerCase() === clientId.toLowerCase()
+      const [
+        scripts,
+        voices,
+        upsells,
+        settings,
+        kbEntries
+      ] = await Promise.all([
+        fetchAll(TABLE_SCRIPTS, `{clientId}="${clientId}"`),
+        fetchAll(TABLE_VOICES, `{clientId}="${clientId}"`),
+        fetchAll(TABLE_UPSELLS, `{clientId}="${clientId}"`),
+        fetchAll(TABLE_SETTINGS, `{clientId}="${clientId}"`),
+        fetchAll(TABLE_KB, `OR({clientId}="${clientId}", {clientId}="")`)
+      ]);
+
+      const scriptMap = Object.fromEntries(
+        scripts.map(r => [r.fields['Step Name'], r.fields.scriptText])
       );
-      if (record) {
-        const f = record.fields;
-        console.log('⚙️  Record fields:', f);
-        if (!validate(f)) {
-          const errs = validate.errors.map(e => `${e.instancePath} ${e.message}`).join(', ');
-          throw new Error(`Invalid config for '${clientId}': ${errs}`);
-        }
-        // parse dataSources
-        let dataSources = defaultConfig.dataSources;
-        if (f.DataSources) {
-          try { dataSources = JSON.parse(f.DataSources); } catch { console.warn(`Bad JSON DataSources for ${clientId}`); }
-        }
-        config = {
-          clientId,
-          botName: f.BotName,
-          voiceId: f.VoiceId,
-          systemPrompt: f.SystemPrompt,
-          modelId: f.ModelId || defaultConfig.modelId, // include client-specific or default
-          gatherTimeout: Number(f.GatherTimeout) || defaultConfig.gatherTimeout,
-          maxRetries: Number(f.MaxRetries) || defaultConfig.maxRetries,
-          dataSources,
-        };
-      }
+
+      const voiceMap = Object.fromEntries(
+        voices.map(r => [r.fields['Voice Name'], { voiceId: r.fields.voiceId, model: r.fields.model }])
+      );
+
+      const upsellList = upsells
+        .filter(r => r.fields.enabled === 'Yes')
+        .map(r => r.fields['Option Name']);
+
+      const settingsMap = Object.fromEntries(
+        settings.map(r => [r.fields.Key, r.fields.value])
+      );
+
+      const kb = kbEntries.map(r => ({ key: r.fields['Topic Key'], content: r.fields.content }));
+
+      config = {
+        ...config,
+        scripts: scriptMap,
+        voices: voiceMap,
+        upsells: upsellList,
+        settings: settingsMap,
+        knowledgeBase: kb
+      };
     } catch (err) {
       console.error(`Error loading config for ${clientId}:`, err);
     }
@@ -118,3 +145,5 @@ export async function getClientConfig(clientId) {
   cache.set(key, config);
   return config;
 }
+
+module.exports = { getClientConfig, getCacheMetrics };
