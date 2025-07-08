@@ -1,6 +1,4 @@
 // Main server file for HelpFlow AI
-// Handles incoming calls, TTS streaming, and RAG search
-// Uses Twilio for voice, ElevenLabs for TTS, and OpenAI for RAG  
 
 import express from 'express';
 import dotenv from 'dotenv';
@@ -56,11 +54,23 @@ app.get('/tts-stream/:client/:type', async (req, res) => {
   const { client: clientId, type } = req.params;
   try {
     const cfg = await getClientConfig(clientId);
-    const text = type === 'greeting'
+
+    const fallbackDefault = type === 'greeting'
+      ? `Hello, thank you for calling ${cfg.botName}. How can I help you today?`
+      : "Sorry, I didn't hear anything. Goodbye.";
+
+    const text = (type === 'greeting'
       ? cfg.scripts['greeting']
-      : cfg.scripts['fallback'];
+      : cfg.scripts['fallback']) || fallbackDefault;
+
     const voiceCfg = cfg.voices[cfg.settings.defaultVoiceName] || { voiceId: cfg.voiceId, model: cfg.modelId };
-    const { stability, similarity } = cfg.settings;
+    const { stability = 0.5, similarity = 0.75 } = cfg.settings;
+
+    console.log('📤 ElevenLabs TTS request:', {
+      text,
+      model_id: voiceCfg.model,
+      voice_settings: { stability, similarity_boost: similarity }
+    });
 
     const llRes = await axios.post(
       `https://api.elevenlabs.io/v1/text-to-speech/${voiceCfg.voiceId}/stream`,
