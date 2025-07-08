@@ -78,6 +78,13 @@ export function getCacheMetrics() {
 }
 
 /**
+ * Register an Express endpoint to expose cache metrics.
+ */
+export function registerMetricsEndpoint(app, path = '/config-metrics') {
+  app.get(path, (req, res) => res.json(getCacheMetrics()));
+}
+
+/**
  * Fetch all records from an Airtable table with optional filter formula.
  */
 async function fetchAll(tableName, filterFormula = '') {
